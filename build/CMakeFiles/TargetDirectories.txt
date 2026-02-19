@@ -1,0 +1,3 @@
+/home/javier/PolarHuskyDev/Bytefrost/build/CMakeFiles/ByteFrost.dir
+/home/javier/PolarHuskyDev/Bytefrost/build/CMakeFiles/edit_cache.dir
+/home/javier/PolarHuskyDev/Bytefrost/build/CMakeFiles/rebuild_cache.dir
