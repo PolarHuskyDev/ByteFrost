@@ -1,8 +1,5 @@
 # ByteFrost programming language
 
-ByteFrost is a systems language aiming for ease of use. No syntax boilerplate just simple straight code.
+> The bible for this project is [LLVM tutorial](https://llvm.org/docs/tutorial/MyFirstLanguageFrontend/index.html)
 
-```cpp
-int a = 0;
-a++;
-```
+ByteFrost is a systems language aiming for ease of use.

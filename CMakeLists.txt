@@ -4,6 +4,13 @@ project(ByteFrost)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Use clang++
+set(CMAKE_CXX_COMPILER "clang++")
+
+# find LLVM
+find_package(LLVM REQUIRED CONFIG)
+
+
 # Add source files
 set(SOURCES
 	src/main.cpp
