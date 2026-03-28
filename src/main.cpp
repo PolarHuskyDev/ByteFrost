@@ -44,7 +44,7 @@ int main(int argc, char* argv[]) {
 	if (argc > 1) {
 		filename = argv[1];
 	}
-	// std::ifstream file("tests/fib.bf");
+
 	std::ifstream file(filename);
 
 	if (!file.is_open()) {
