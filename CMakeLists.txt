@@ -1,25 +1,23 @@
-cmake_minimum_required(VERSION 3.10)
-project(ByteFrost)
+cmake_minimum_required(VERSION 3.15)
+project(byte_frost CXX)
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_package(LLVM REQUIRED)
 
-# Use clang++
-set(CMAKE_CXX_COMPILER "clang++")
-
-# find LLVM
-find_package(LLVM REQUIRED CONFIG)
-
-
-# Add source files
-set(SOURCES
+add_executable(
+	byte_frost
 	src/main.cpp
 )
 
-# Create executable
-add_executable(${PROJECT_NAME} ${SOURCES})
-
-# Include directories
-target_include_directories(${PROJECT_NAME} PRIVATE
-	${CMAKE_CURRENT_SOURCE_DIR}/include
+target_include_directories(
+	byte_frost
+	PUBLIC
+	include
 )
+
+target_link_libraries(byte_frost llvm-core::llvm-core)
+
+install(TARGETS byte_frost DESTINATION "."
+        RUNTIME DESTINATION bin
+        ARCHIVE DESTINATION lib
+        LIBRARY DESTINATION lib
+        )

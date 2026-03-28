@@ -40,7 +40,7 @@ const char* tokenTypeToString(TokenType type) {
 }
 
 int main(int argc, char* argv[]) {
-	char* filename = "tests/hello_world.bf";
+	const char* filename = "tests/hello_world.bf";
 	if (argc > 1) {
 		filename = argv[1];
 	}
