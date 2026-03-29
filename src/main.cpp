@@ -1,9 +1,13 @@
-#include <iostream>
+#include <cstring>
 #include <fstream>
+#include <iostream>
 
+#include "ast_printer.h"
+#include "codegen.h"
 #include "lexer.h"
+#include "parser.h"
 
-const char* tokenTypeToString(TokenType type) {
+static const char* tokenTypeToString(TokenType type) {
 	switch (type) {
 		case TOKEN_NUMBER: return "NUMBER";
 		case TOKEN_STRING: return "STRING";
@@ -40,9 +44,18 @@ const char* tokenTypeToString(TokenType type) {
 }
 
 int main(int argc, char* argv[]) {
-	const char* filename = "tests/hello_world.bf";
-	if (argc > 1) {
-		filename = argv[1];
+	const char* filename = "tests/fib.bf";
+	bool tokensOnly = false;
+	bool astOnly = false;
+
+	for (int i = 1; i < argc; i++) {
+		if (std::strcmp(argv[i], "--tokens") == 0) {
+			tokensOnly = true;
+		} else if (std::strcmp(argv[i], "--ast") == 0) {
+			astOnly = true;
+		} else {
+			filename = argv[i];
+		}
 	}
 
 	std::ifstream file(filename);
@@ -53,12 +66,35 @@ int main(int argc, char* argv[]) {
 	}
 
 	std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-	Lexer lexer(source);
-	Token token;
-	do {
-		token = lexer.nextToken();
-		printf("Token: %s (Type: %s, Line: %d, Column: %d)\n", token.value.c_str(), tokenTypeToString(token.type), token.line, token.column);
-	} while (token.type != TOKEN_EOF);
+
+	if (tokensOnly) {
+		Lexer lexer(source);
+		Token token;
+		do {
+			token = lexer.nextToken();
+			std::printf("Token: %s (Type: %s, Line: %d, Column: %d)\n",
+				token.value.c_str(), tokenTypeToString(token.type),
+				token.line, token.column);
+		} while (token.type != TOKEN_EOF);
+	} else {
+		Lexer lexer(source);
+		Parser parser(lexer);
+		Program program = parser.parse();
+
+		if (astOnly) {
+			ASTPrinter::print(program);
+			return 0;
+		}
+
+		CodeGen codegen("bytefrost");
+		codegen.generate(program);
+
+		if (!codegen.verify()) {
+			return 1;
+		}
+
+		codegen.dumpIR();
+	}
 
 	return 0;
 }
