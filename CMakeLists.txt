@@ -6,6 +6,10 @@ find_package(LLVM REQUIRED)
 add_executable(
 	byte_frost
 	src/main.cpp
+	
+	# Tokenizer
+	src/tokenizer/tokens.cpp
+	src/tokenizer/lexer.cpp
 )
 
 target_include_directories(

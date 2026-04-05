@@ -2,60 +2,13 @@
 #include <fstream>
 #include <iostream>
 
-#include "ast_printer.h"
-#include "codegen.h"
-#include "lexer.h"
-#include "parser.h"
-
-static const char* tokenTypeToString(TokenType type) {
-	switch (type) {
-		case TOKEN_NUMBER: return "NUMBER";
-		case TOKEN_STRING: return "STRING";
-		case TOKEN_IDENTIFIER: return "IDENTIFIER";
-		case TOKEN_COLON: return "COLON";
-		case TOKEN_PLUS: return "PLUS";
-		case TOKEN_MINUS: return "MINUS";
-		case TOKEN_MULTIPLY: return "MULTIPLY";
-		case TOKEN_DIVIDE: return "DIVIDE";
-		case TOKEN_ASSIGN: return "ASSIGN";
-		case TOKEN_LPAREN: return "LPAREN";
-		case TOKEN_RPAREN: return "RPAREN";
-		case TOKEN_LBRACE: return "LBRACE";
-		case TOKEN_RBRACE: return "RBRACE";
-		case TOKEN_SEMICOLON: return "SEMICOLON";
-		case TOKEN_COMMA: return "COMMA";
-		case TOKEN_LT: return "LT";
-		case TOKEN_GT: return "GT";
-		case TOKEN_LE: return "LE";
-		case TOKEN_GE: return "GE";
-		case TOKEN_EQ: return "EQ";
-		case TOKEN_NEQ: return "NEQ";
-		case TOKEN_IF: return "IF";
-		case TOKEN_ELSE: return "ELSE";
-		case TOKEN_RETURN: return "RETURN";
-		case TOKEN_TYPE_INT: return "TYPE_INT";
-		case TOKEN_TYPE_STRING: return "TYPE_STRING";
-		case TOKEN_TYPE_VOID: return "TYPE_VOID";
-		case TOKEN_TYPE_BOOL: return "TYPE_BOOL";
-		case TOKEN_TYPE_FLOAT: return "TYPE_FLOAT";
-		case TOKEN_EOF: return "EOF";
-		default: return "UNKNOWN";
-	}
-}
+#include "tokenizer/lexer.h"
+#include "tokenizer/tokens.h"
 
 int main(int argc, char* argv[]) {
 	const char* filename = "tests/fib.bf";
-	bool tokensOnly = false;
-	bool astOnly = false;
-
-	for (int i = 1; i < argc; i++) {
-		if (std::strcmp(argv[i], "--tokens") == 0) {
-			tokensOnly = true;
-		} else if (std::strcmp(argv[i], "--ast") == 0) {
-			astOnly = true;
-		} else {
-			filename = argv[i];
-		}
+	if (argc > 1) {
+		filename = argv[1];
 	}
 
 	std::ifstream file(filename);
@@ -67,34 +20,17 @@ int main(int argc, char* argv[]) {
 
 	std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
-	if (tokensOnly) {
-		Lexer lexer(source);
-		Token token;
-		do {
-			token = lexer.nextToken();
-			std::printf("Token: %s (Type: %s, Line: %d, Column: %d)\n",
-				token.value.c_str(), tokenTypeToString(token.type),
-				token.line, token.column);
-		} while (token.type != TOKEN_EOF);
-	} else {
-		Lexer lexer(source);
-		Parser parser(lexer);
-		Program program = parser.parse();
+	Lexer lexer(source);
+	Token token;
 
-		if (astOnly) {
-			ASTPrinter::print(program);
-			return 0;
-		}
-
-		CodeGen codegen("bytefrost");
-		codegen.generate(program);
-
-		if (!codegen.verify()) {
-			return 1;
-		}
-
-		codegen.dumpIR();
-	}
+	do {
+		token = lexer.nextToken();
+		std::printf("Token: %s (Type: %s, Line: %d, Column: %d)\n",
+					token.value.c_str(),
+					tokenTypeToString(token.type),
+					token.line,
+					token.column);
+	} while (token.type != EOF_TOKEN);
 
 	return 0;
 }
