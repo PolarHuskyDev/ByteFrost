@@ -1,6 +1,8 @@
 #pragma once
 
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "tokens.h"
 
@@ -9,21 +11,29 @@ class Lexer {
 	Lexer(const std::string& source) : source(source), position(0), line(1), column(1) {
 	}
 
+	std::vector<Token> tokenize();
 	Token nextToken();
 
-	private:
+   public:
 	void skipWhitespace();
-	void skipComment();
+	void skipLineComment();
+	void skipBlockComment();
 	void advance();
+	char current() const;
+	char peek() const;
 
-	Token parseNumber();
-	Token parseString();
-	Token parseIdentifierOrKeyword();
+	bool isSpecialChar(char c) const;
 	Token parseOperatorOrDelimiter();
+	Token parseNumber();
+	Token parseIdentifierOrKeyword();
+	Token parseString();
+	Token parseCharLiteral();
 
    private:
 	std::string source;
 	size_t position;
 	int line;
 	int column;
+
+	static const std::unordered_map<std::string, TokenType> keywords;
 };
