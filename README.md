@@ -185,6 +185,72 @@ main(): int {
 }
 ```
 
+### Struct Composition
+
+Structs can contain fields of other struct types, enabling composition:
+
+```bf
+struct Point {
+	x: int;
+	y: int;
+}
+
+struct Circle {
+	center: Point;
+	radius: float;
+}
+
+main(): int {
+	c: Circle = {
+		center: { x: 10, y: 20 },
+		radius: 5.5
+	};
+
+	print("Circle center: ({c.center.x}, {c.center.y}), radius: {c.radius}");
+	// Circle center: (10, 20), radius: 5.5
+
+	return 0;
+}
+```
+
+Nested structs are embedded inline (value semantics) — no pointers or heap allocation. Chained member access (`c.center.x`) is fully supported, including in interpolated strings.
+
+## Memory Model: Reference Counting
+
+ByteFrost uses **reference counting** to manage heap-allocated memory for container types (`array<T>` and `map<K,V>`).
+
+### How it works
+
+Each array and map carries a hidden refcount pointer alongside its data:
+
+| Type | Layout |
+|------|--------|
+| `array<T>` | `{ ptr data, i64 length, i64 capacity, ptr refcount }` |
+| `map<K,V>` | `{ ptr keys, ptr values, i64 length, i64 capacity, ptr refcount }` |
+
+- **Creation**: When an array or map is created, a refcount is `malloc`'d, initialized to 1, and stored in the struct.
+- **Scope exit**: When a variable goes out of scope (function return), the refcount is decremented. If it reaches zero, all heap buffers (data, keys, values) and the refcount itself are freed.
+- **Structs**: User-defined structs are stack-allocated value types — no refcounting needed. Composition (struct-in-struct) embeds fields inline with no heap allocation.
+
+### Why reference counting?
+
+| Criterion | RAII (deep copy) | Reference Counting | Tracing GC |
+|-----------|------------------|--------------------|------------|
+| Sharing | ✗ always copies | ✓ cheap aliasing | ✓ cheap aliasing |
+| Deterministic free | ✓ | ✓ | ✗ |
+| Runtime overhead | copy cost | increment/decrement | pause times |
+| Implementation complexity | low | moderate | high |
+
+Reference counting gives deterministic deallocation with cheap sharing — a good balance for a systems-oriented language.
+
+### Cycle safety
+
+Reference cycles (A → B → A) cannot occur in ByteFrost because:
+- Structs are **value types** embedded inline — they cannot form pointer cycles.
+- Arrays and maps hold primitive values or struct copies, not references to other containers.
+
+This is a structural guarantee: no cycle collector is needed.
+
 
 Right now I would like an overall evaluation from you in terms of clarity, readability and get an overall score of the language. I would also like to get some suggestions on what can be changed, added or improved
 

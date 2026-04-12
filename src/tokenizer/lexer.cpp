@@ -109,6 +109,21 @@ Token Lexer::nextToken() {
 		return Token(TokenType::EOF_TOKEN, "", line, column);
 	}
 
+	// Inside interpolated string: track brace depth and detect end of interpolation
+	if (inInterpolation) {
+		if (c == '}') {
+			if (interpBraceDepth > 0) {
+				interpBraceDepth--;
+				// Fall through to normal tokenization (returns RIGHT_BRACE_TOKEN)
+			} else {
+				return continueInterpolatedString();
+			}
+		} else if (c == '{') {
+			interpBraceDepth++;
+			// Fall through to normal tokenization (returns LEFT_BRACE_TOKEN)
+		}
+	}
+
 	// Line comment
 	if (c == '/' && peek() == '/') {
 		skipLineComment();
@@ -347,8 +362,16 @@ Token Lexer::parseString() {
 				case '\\': str += '\\'; break;
 				case '"': str += '"'; break;
 				case '0': str += '\0'; break;
+				case '{': str += '{'; break;  // escaped brace — not interpolation
+				case '}': str += '}'; break;
 				default: str += current(); break;
 			}
+		} else if (current() == '{') {
+			// Start of string interpolation
+			advance(); // consume '{'
+			inInterpolation = true;
+			interpBraceDepth = 0;
+			return Token(TokenType::INTERP_STRING_START_TOKEN, str, line, startColumn);
 		} else {
 			str += current();
 		}
@@ -360,6 +383,43 @@ Token Lexer::parseString() {
 	}
 
 	return Token(TokenType::STRING_LITERAL_TOKEN, str, line, startColumn);
+}
+
+Token Lexer::continueInterpolatedString() {
+	int startColumn = column;
+	advance(); // consume the closing '}'
+	std::string str;
+
+	while (position < source.size() && current() != '"') {
+		if (current() == '\\') {
+			advance(); // consume backslash
+			switch (current()) {
+				case 'n': str += '\n'; break;
+				case 't': str += '\t'; break;
+				case '\\': str += '\\'; break;
+				case '"': str += '"'; break;
+				case '0': str += '\0'; break;
+				case '{': str += '{'; break;
+				case '}': str += '}'; break;
+				default: str += current(); break;
+			}
+			advance();
+		} else if (current() == '{') {
+			advance(); // consume '{'
+			interpBraceDepth = 0;
+			return Token(TokenType::INTERP_STRING_MID_TOKEN, str, line, startColumn);
+		} else {
+			str += current();
+			advance();
+		}
+	}
+
+	if (current() == '"') {
+		advance(); // consume closing "
+	}
+
+	inInterpolation = false;
+	return Token(TokenType::INTERP_STRING_END_TOKEN, str, line, startColumn);
 }
 
 Token Lexer::parseCharLiteral() {

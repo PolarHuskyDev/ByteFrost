@@ -15,6 +15,11 @@ enum class TokenType {
 	CHAR_LITERAL_TOKEN,
 	IDENTIFIER_TOKEN,
 
+	// Interpolated string tokens
+	INTERP_STRING_START_TOKEN,  // "text{ — opening fragment before first interpolation
+	INTERP_STRING_MID_TOKEN,    // }text{ — fragment between interpolations
+	INTERP_STRING_END_TOKEN,    // }text" — closing fragment after last interpolation
+
 	// Keywords
 	IF_TOKEN,
 	ELSE_TOKEN,

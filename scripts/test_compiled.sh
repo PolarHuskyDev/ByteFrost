@@ -153,10 +153,17 @@ run_test "operators" "$TESTS_DIR/operators.bf" "$OPERATORS_EXPECTED"
 run_test "break_continue" "$TESTS_DIR/break_continue.bf" "$(printf '0\n1\n3\n4\n5\n6')"
 
 # --- struct.bf ---
-skip_test "struct" "struct codegen not yet implemented"
+run_test "struct" "$TESTS_DIR/struct.bf" "Hi I am Peter, and I am 21 years old"
+
+# --- constructor.bf ---
+run_test "constructor" "$TESTS_DIR/constructor.bf" "Area: 22"
 
 # --- containers.bf ---
-skip_test "containers" "array/map codegen not yet implemented"
+CONTAINERS_EXPECTED="$(printf '[0, 1, 2, 3, 4, 5]\n[0, 1, 4, 9, 16, 25]\n{200: Ok, 201: Created, 404: Not Found}')"
+run_test "containers" "$TESTS_DIR/containers.bf" "$CONTAINERS_EXPECTED"
+
+# --- composition.bf ---
+run_test "composition" "$TESTS_DIR/composition.bf" "Circle center: (10, 20), radius: 5.5"
 
 echo ""
 echo "=== Results ==="

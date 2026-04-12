@@ -116,7 +116,9 @@ match_case =
     pattern "=>" block ;
 
 pattern =
-    expression { "|" expression } ;
+      "null"
+    | identifier                        (* binding pattern *)
+    | expression { "|" expression } ;
 
 default_case =
     "_" "=>" block ;
@@ -205,8 +207,12 @@ postfix_expression =
 primary_expression =
       literal
     | "this"
+    | identifier "{" field_init_list? "}"   (* named struct init *)
     | identifier
     | "(" expression ")" ;
+
+field_init_list =
+    identifier ":" expression { "," identifier ":" expression } ;
 
 argument_list =
     expression { "," expression } ;
@@ -221,7 +227,9 @@ literal =
     | string_literal
     | interpolated_string
     | char_literal
-    | boolean_literal ;
+    | boolean_literal
+    | "null"
+    | "[" [ expression { "," expression } ] "]" ;
 
 boolean_literal = "true" | "false" ;
 

@@ -28,12 +28,17 @@ class Lexer {
 	Token parseIdentifierOrKeyword();
 	Token parseString();
 	Token parseCharLiteral();
+	Token continueInterpolatedString();
 
    private:
 	std::string source;
 	size_t position;
 	int line;
 	int column;
+
+	// Interpolated string state
+	bool inInterpolation = false;
+	int interpBraceDepth = 0;
 
 	static const std::unordered_map<std::string, TokenType> keywords;
 };

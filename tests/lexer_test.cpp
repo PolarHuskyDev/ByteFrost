@@ -418,4 +418,66 @@ TEST(LexerLineTracking, LineAndColumn) {
 	EXPECT_EQ(tokens[1].line, 2);
 	EXPECT_EQ(tokens[1].column, 1);
 }
+
+// ============================================================
+// Interpolated strings
+// ============================================================
+
+TEST(LexerInterpolation, SimpleInterpolation) {
+	auto tokens = lex("\"Hello {name}!\"");
+	ASSERT_GE(tokens.size(), 4u);
+	expectToken(tokens[0], TokenType::INTERP_STRING_START_TOKEN, "Hello ");
+	expectToken(tokens[1], TokenType::IDENTIFIER_TOKEN, "name");
+	expectToken(tokens[2], TokenType::INTERP_STRING_END_TOKEN, "!");
+}
+
+TEST(LexerInterpolation, MultipleInterpolations) {
+	auto tokens = lex("\"Hi {a} and {b} end\"");
+	ASSERT_GE(tokens.size(), 6u);
+	expectToken(tokens[0], TokenType::INTERP_STRING_START_TOKEN, "Hi ");
+	expectToken(tokens[1], TokenType::IDENTIFIER_TOKEN, "a");
+	expectToken(tokens[2], TokenType::INTERP_STRING_MID_TOKEN, " and ");
+	expectToken(tokens[3], TokenType::IDENTIFIER_TOKEN, "b");
+	expectToken(tokens[4], TokenType::INTERP_STRING_END_TOKEN, " end");
+}
+
+TEST(LexerInterpolation, EmptyFragments) {
+	auto tokens = lex("\"{x}\"");
+	ASSERT_GE(tokens.size(), 4u);
+	expectToken(tokens[0], TokenType::INTERP_STRING_START_TOKEN, "");
+	expectToken(tokens[1], TokenType::IDENTIFIER_TOKEN, "x");
+	expectToken(tokens[2], TokenType::INTERP_STRING_END_TOKEN, "");
+}
+
+TEST(LexerInterpolation, ExpressionInterpolation) {
+	auto tokens = lex("\"sum={a+b}\"");
+	ASSERT_GE(tokens.size(), 6u);
+	expectToken(tokens[0], TokenType::INTERP_STRING_START_TOKEN, "sum=");
+	expectToken(tokens[1], TokenType::IDENTIFIER_TOKEN, "a");
+	expectToken(tokens[2], TokenType::PLUS_TOKEN, "+");
+	expectToken(tokens[3], TokenType::IDENTIFIER_TOKEN, "b");
+	expectToken(tokens[4], TokenType::INTERP_STRING_END_TOKEN, "");
+}
+
+TEST(LexerInterpolation, NoInterpolation) {
+	auto tokens = lex("\"plain string\"");
+	ASSERT_GE(tokens.size(), 2u);
+	expectToken(tokens[0], TokenType::STRING_LITERAL_TOKEN, "plain string");
+}
+
+TEST(LexerInterpolation, EscapedBrace) {
+	auto tokens = lex("\"curly \\{brace\\}\"");
+	ASSERT_GE(tokens.size(), 2u);
+	expectToken(tokens[0], TokenType::STRING_LITERAL_TOKEN, "curly {brace}");
+}
+
+TEST(LexerInterpolation, MemberAccessInInterpolation) {
+	auto tokens = lex("\"name is {this.name}\"");
+	ASSERT_GE(tokens.size(), 5u);
+	expectToken(tokens[0], TokenType::INTERP_STRING_START_TOKEN, "name is ");
+	expectToken(tokens[1], TokenType::THIS_TOKEN, "this");
+	expectToken(tokens[2], TokenType::DOT_TOKEN, ".");
+	expectToken(tokens[3], TokenType::IDENTIFIER_TOKEN, "name");
+	expectToken(tokens[4], TokenType::INTERP_STRING_END_TOKEN, "");
+}
 	

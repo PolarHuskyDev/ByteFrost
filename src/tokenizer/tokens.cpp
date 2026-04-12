@@ -9,6 +9,9 @@ const char* tokenTypeToString(TokenType type) {
 		case TokenType::STRING_LITERAL_TOKEN: return "STRING_LITERAL";
 		case TokenType::CHAR_LITERAL_TOKEN: return "CHAR_LITERAL";
 		case TokenType::IDENTIFIER_TOKEN: return "IDENTIFIER";
+		case TokenType::INTERP_STRING_START_TOKEN: return "INTERP_STRING_START";
+		case TokenType::INTERP_STRING_MID_TOKEN: return "INTERP_STRING_MID";
+		case TokenType::INTERP_STRING_END_TOKEN: return "INTERP_STRING_END";
 		case TokenType::IF_TOKEN: return "IF";
 		case TokenType::ELSE_TOKEN: return "ELSE";
 		case TokenType::ELSEIF_TOKEN: return "ELSEIF";

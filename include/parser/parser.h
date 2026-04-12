@@ -55,6 +55,7 @@ class Parser {
 	ExprPtr parseUnary();
 	ExprPtr parsePostfix();
 	ExprPtr parsePrimary();
+	ExprPtr parseInterpolatedString();
 	std::vector<ExprPtr> parseArgumentList();
 
 	// Token helpers

@@ -944,3 +944,246 @@ main(): int {
 	EXPECT_EQ(un->op, "-");
 	EXPECT_TRUE(un->prefix);
 }
+
+// ============================================================
+// Struct parsing
+// ============================================================
+
+TEST(ParserStructs, StructDecl) {
+	auto program = parse(R"(
+struct Person {
+	name: string;
+	age: int;
+}
+main(): int { return 0; }
+)");
+	ASSERT_EQ(program.structs.size(), 1u);
+	EXPECT_EQ(program.structs[0]->name, "Person");
+	// Two field members
+	int fieldCount = 0;
+	for (const auto& m : program.structs[0]->members) {
+		if (m.kind == StructMember::FIELD) fieldCount++;
+	}
+	EXPECT_EQ(fieldCount, 2);
+}
+
+TEST(ParserStructs, StructWithMethod) {
+	auto program = parse(R"(
+struct Greeter {
+	msg: string;
+	greet(): void {
+		print(this.msg);
+	}
+}
+main(): int { return 0; }
+)");
+	ASSERT_EQ(program.structs.size(), 1u);
+	int methodCount = 0;
+	for (const auto& m : program.structs[0]->members) {
+		if (m.kind == StructMember::METHOD) methodCount++;
+	}
+	EXPECT_EQ(methodCount, 1);
+}
+
+TEST(ParserStructs, StructInit) {
+	auto program = parse(R"(
+struct Point { x: int; y: int; }
+main(): int {
+	p: Point = { x: 1, y: 2 };
+	return 0;
+}
+)");
+	auto* decl = dynamic_cast<VarDeclStmt*>(program.functions[0]->body.statements[0].get());
+	ASSERT_NE(decl, nullptr);
+	auto* init = dynamic_cast<StructInitExpr*>(decl->initializer.get());
+	ASSERT_NE(init, nullptr);
+	EXPECT_EQ(init->fields.size(), 2u);
+	EXPECT_EQ(init->fields[0].first, "x");
+	EXPECT_EQ(init->fields[1].first, "y");
+}
+
+TEST(ParserStructs, MemberAccess) {
+	auto program = parse(R"(
+main(): int {
+	x := p.name;
+	return 0;
+}
+)");
+	auto* decl = dynamic_cast<VarDeclStmt*>(program.functions[0]->body.statements[0].get());
+	ASSERT_NE(decl, nullptr);
+	auto* member = dynamic_cast<MemberAccessExpr*>(decl->initializer.get());
+	ASSERT_NE(member, nullptr);
+	EXPECT_EQ(member->member, "name");
+}
+
+TEST(ParserStructs, MethodCall) {
+	auto program = parse(R"(
+main(): int {
+	p.salute();
+	return 0;
+}
+)");
+	auto* exprStmt = dynamic_cast<ExprStmt*>(program.functions[0]->body.statements[0].get());
+	ASSERT_NE(exprStmt, nullptr);
+	auto* call = dynamic_cast<CallExpr*>(exprStmt->expression.get());
+	ASSERT_NE(call, nullptr);
+	auto* callee = dynamic_cast<MemberAccessExpr*>(call->callee.get());
+	ASSERT_NE(callee, nullptr);
+	EXPECT_EQ(callee->member, "salute");
+}
+
+TEST(ParserStructs, ConstructorDecl) {
+	auto program = parse(R"(
+struct Point {
+	x: int;
+	y: int;
+	constructor(x: int, y: int) {
+		this.x = x;
+		this.y = y;
+	}
+}
+main(): int { return 0; }
+)");
+	ASSERT_EQ(program.structs.size(), 1u);
+	int methodCount = 0;
+	for (const auto& m : program.structs[0]->members) {
+		if (m.kind == StructMember::METHOD && m.method->name == "constructor") methodCount++;
+	}
+	EXPECT_EQ(methodCount, 1);
+}
+
+TEST(ParserStructs, ConstructorCall) {
+	auto program = parse(R"(
+struct Point { x: int; y: int; constructor(x: int, y: int) { this.x = x; this.y = y; } }
+main(): int {
+	p: Point = Point(1, 2);
+	return 0;
+}
+)");
+	auto* decl = dynamic_cast<VarDeclStmt*>(program.functions[0]->body.statements[0].get());
+	ASSERT_NE(decl, nullptr);
+	auto* call = dynamic_cast<CallExpr*>(decl->initializer.get());
+	ASSERT_NE(call, nullptr);
+	ASSERT_EQ(call->arguments.size(), 2u);
+	auto* callee = dynamic_cast<IdentifierExpr*>(call->callee.get());
+	ASSERT_NE(callee, nullptr);
+	EXPECT_EQ(callee->name, "Point");
+}
+
+// ============================================================
+// Array parsing
+// ============================================================
+
+TEST(ParserArrays, ArrayLiteral) {
+	auto program = parse(R"(
+main(): int {
+	list: array<int> = [1, 2, 3];
+	return 0;
+}
+)");
+	auto* decl = dynamic_cast<VarDeclStmt*>(program.functions[0]->body.statements[0].get());
+	ASSERT_NE(decl, nullptr);
+	EXPECT_EQ(decl->type->name, "array");
+	ASSERT_EQ(decl->type->typeParams.size(), 1u);
+	EXPECT_EQ(decl->type->typeParams[0]->name, "int");
+	auto* arr = dynamic_cast<ArrayLiteralExpr*>(decl->initializer.get());
+	ASSERT_NE(arr, nullptr);
+	EXPECT_EQ(arr->elements.size(), 3u);
+}
+
+TEST(ParserArrays, EmptyArray) {
+	auto program = parse(R"(
+main(): int {
+	list: array<int>;
+	return 0;
+}
+)");
+	auto* decl = dynamic_cast<VarDeclStmt*>(program.functions[0]->body.statements[0].get());
+	ASSERT_NE(decl, nullptr);
+	EXPECT_EQ(decl->type->name, "array");
+	EXPECT_EQ(decl->initializer, nullptr);
+}
+
+TEST(ParserArrays, IndexAccess) {
+	auto program = parse(R"(
+main(): int {
+	x := arr[0];
+	return 0;
+}
+)");
+	auto* decl = dynamic_cast<VarDeclStmt*>(program.functions[0]->body.statements[0].get());
+	ASSERT_NE(decl, nullptr);
+	auto* idx = dynamic_cast<IndexExpr*>(decl->initializer.get());
+	ASSERT_NE(idx, nullptr);
+}
+
+// ============================================================
+// Map parsing
+// ============================================================
+
+TEST(ParserMaps, MapDeclaration) {
+	auto program = parse(R"(
+main(): int {
+	codes: map<int, string>;
+	return 0;
+}
+)");
+	auto* decl = dynamic_cast<VarDeclStmt*>(program.functions[0]->body.statements[0].get());
+	ASSERT_NE(decl, nullptr);
+	EXPECT_EQ(decl->type->name, "map");
+	ASSERT_EQ(decl->type->typeParams.size(), 2u);
+	EXPECT_EQ(decl->type->typeParams[0]->name, "int");
+	EXPECT_EQ(decl->type->typeParams[1]->name, "string");
+}
+
+TEST(ParserMaps, MapIndexAssign) {
+	auto program = parse(R"(
+main(): int {
+	codes[200] = "Ok";
+	return 0;
+}
+)");
+	auto* assign = dynamic_cast<AssignStmt*>(program.functions[0]->body.statements[0].get());
+	ASSERT_NE(assign, nullptr);
+	auto* idx = dynamic_cast<IndexExpr*>(assign->target.get());
+	ASSERT_NE(idx, nullptr);
+}
+
+// ============================================================
+// Interpolated string parsing
+// ============================================================
+
+TEST(ParserInterpolation, BasicInterpolation) {
+	auto program = parse(R"(
+main(): int {
+	print("Hello {name}!");
+	return 0;
+}
+)");
+	auto* exprStmt = dynamic_cast<ExprStmt*>(program.functions[0]->body.statements[0].get());
+	ASSERT_NE(exprStmt, nullptr);
+	auto* call = dynamic_cast<CallExpr*>(exprStmt->expression.get());
+	ASSERT_NE(call, nullptr);
+	ASSERT_EQ(call->arguments.size(), 1u);
+	auto* interp = dynamic_cast<InterpolatedStringExpr*>(call->arguments[0].get());
+	ASSERT_NE(interp, nullptr);
+	EXPECT_EQ(interp->fragments.size(), 2u);  // "Hello " and "!"
+	EXPECT_EQ(interp->expressions.size(), 1u);
+	EXPECT_EQ(interp->fragments[0], "Hello ");
+	EXPECT_EQ(interp->fragments[1], "!");
+}
+
+TEST(ParserInterpolation, MultipleExpressions) {
+	auto program = parse(R"(
+main(): int {
+	msg := "{a} and {b}";
+	return 0;
+}
+)");
+	auto* decl = dynamic_cast<VarDeclStmt*>(program.functions[0]->body.statements[0].get());
+	ASSERT_NE(decl, nullptr);
+	auto* interp = dynamic_cast<InterpolatedStringExpr*>(decl->initializer.get());
+	ASSERT_NE(interp, nullptr);
+	EXPECT_EQ(interp->fragments.size(), 3u);  // "", " and ", ""
+	EXPECT_EQ(interp->expressions.size(), 2u);
+}

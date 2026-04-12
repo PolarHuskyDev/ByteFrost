@@ -117,10 +117,21 @@ struct ArrayLiteralExpr : Expression {
 	ArrayLiteralExpr(std::vector<ExprPtr> elements) : elements(std::move(elements)) {}
 };
 
-// Struct init literal: { name: "Peter", age: 21 }
+// Struct init literal: { name: "Peter", age: 21 } or TypeName { field: value }
 struct StructInitExpr : Expression {
+	std::string structName;  // Optional: empty for anonymous { }, set for TypeName { }
 	std::vector<std::pair<std::string, ExprPtr>> fields;
-	StructInitExpr(std::vector<std::pair<std::string, ExprPtr>> fields) : fields(std::move(fields)) {}
+	StructInitExpr(std::vector<std::pair<std::string, ExprPtr>> fields,
+				   const std::string& structName = "")
+		: structName(structName), fields(std::move(fields)) {}
+};
+
+// String interpolation: "Hello {name}, age {age}"
+struct InterpolatedStringExpr : Expression {
+	std::vector<std::string> fragments;   // N+1 string fragments
+	std::vector<ExprPtr> expressions;     // N embedded expressions
+	InterpolatedStringExpr(std::vector<std::string> fragments, std::vector<ExprPtr> expressions)
+		: fragments(std::move(fragments)), expressions(std::move(expressions)) {}
 };
 
 // ========================

@@ -22,6 +22,12 @@ CodeGen::CodeGen() {
 std::string CodeGen::generate(const Program& program) {
 	declareBuiltins();
 
+	// Register all struct types first (so they can be referenced).
+	registerStructTypes(program);
+
+	// Generate struct methods.
+	generateStructMethods(program);
+
 	// Generate all functions.
 	for (const auto& fn : program.functions) {
 		generateFunction(*fn);
@@ -46,23 +52,33 @@ std::string CodeGen::generate(const Program& program) {
 // ==========================
 
 void CodeGen::declareBuiltins() {
+	auto* i8Ptr = llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(*context));
+	auto* i32 = llvm::Type::getInt32Ty(*context);
+	auto* i64 = llvm::Type::getInt64Ty(*context);
+
 	// printf(const char* fmt, ...) -> i32
-	auto printfType = llvm::FunctionType::get(
-		llvm::Type::getInt32Ty(*context),
-		{llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(*context))},
-		true  // variadic
-	);
-	printfFunc = llvm::Function::Create(
-		printfType, llvm::Function::ExternalLinkage, "printf", module.get());
+	auto printfType = llvm::FunctionType::get(i32, {i8Ptr}, true);
+	printfFunc = llvm::Function::Create(printfType, llvm::Function::ExternalLinkage, "printf", module.get());
 
 	// strcmp(const char*, const char*) -> i32
-	auto strcmpType = llvm::FunctionType::get(
-		llvm::Type::getInt32Ty(*context),
-		{llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(*context)),
-		 llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(*context))},
-		false);
-	strcmpFunc = llvm::Function::Create(
-		strcmpType, llvm::Function::ExternalLinkage, "strcmp", module.get());
+	auto strcmpType = llvm::FunctionType::get(i32, {i8Ptr, i8Ptr}, false);
+	strcmpFunc = llvm::Function::Create(strcmpType, llvm::Function::ExternalLinkage, "strcmp", module.get());
+
+	// malloc(size_t) -> void*
+	auto mallocType = llvm::FunctionType::get(i8Ptr, {i64}, false);
+	mallocFunc = llvm::Function::Create(mallocType, llvm::Function::ExternalLinkage, "malloc", module.get());
+
+	// realloc(void*, size_t) -> void*
+	auto reallocType = llvm::FunctionType::get(i8Ptr, {i8Ptr, i64}, false);
+	reallocFunc = llvm::Function::Create(reallocType, llvm::Function::ExternalLinkage, "realloc", module.get());
+
+	// free(void*) -> void
+	auto freeType = llvm::FunctionType::get(llvm::Type::getVoidTy(*context), {i8Ptr}, false);
+	freeFunc = llvm::Function::Create(freeType, llvm::Function::ExternalLinkage, "free", module.get());
+
+	// snprintf(char* buf, size_t size, const char* fmt, ...) -> i32
+	auto snprintfType = llvm::FunctionType::get(i32, {i8Ptr, i64, i8Ptr}, true);
+	snprintfFunc = llvm::Function::Create(snprintfType, llvm::Function::ExternalLinkage, "snprintf", module.get());
 }
 
 // ==========================
@@ -77,9 +93,90 @@ void CodeGen::popScope() {
 	scopes.pop_back();
 }
 
-void CodeGen::declareVariable(const std::string& name, llvm::AllocaInst* alloca, llvm::Type* type) {
+void CodeGen::emitRefIncrement(llvm::Value* structAlloca, bool isMap) {
+	auto* i64 = llvm::Type::getInt64Ty(*context);
+	auto* ptrType = llvm::PointerType::getUnqual(*context);
+
+	size_t rcIdx = isMap ? 4 : 3;
+	llvm::StructType* structType;
+	if (isMap) {
+		structType = llvm::StructType::get(*context, {ptrType, ptrType, i64, i64, ptrType});
+	} else {
+		structType = llvm::StructType::get(*context, {ptrType, i64, i64, ptrType});
+	}
+
+	auto* rcPtrPtr = builder->CreateStructGEP(structType, structAlloca, rcIdx, "rc.ptr.ptr");
+	auto* rcPtr = builder->CreateLoad(ptrType, rcPtrPtr, "rc.ptr");
+	auto* rcVal = builder->CreateLoad(i64, rcPtr, "rc.val");
+	auto* newRc = builder->CreateAdd(rcVal, llvm::ConstantInt::get(i64, 1), "rc.inc");
+	builder->CreateStore(newRc, rcPtr);
+}
+
+void CodeGen::emitRefDecrement(llvm::Value* structAlloca, bool isMap) {
+	auto* fn = builder->GetInsertBlock()->getParent();
+	auto* i64 = llvm::Type::getInt64Ty(*context);
+	auto* ptrType = llvm::PointerType::getUnqual(*context);
+
+	size_t rcIdx = isMap ? 4 : 3;
+	llvm::StructType* structType;
+	if (isMap) {
+		structType = llvm::StructType::get(*context, {ptrType, ptrType, i64, i64, ptrType});
+	} else {
+		structType = llvm::StructType::get(*context, {ptrType, i64, i64, ptrType});
+	}
+
+	auto* rcPtrPtr = builder->CreateStructGEP(structType, structAlloca, rcIdx, "rc.ptr.ptr");
+	auto* rcPtr = builder->CreateLoad(ptrType, rcPtrPtr, "rc.ptr");
+	auto* rcVal = builder->CreateLoad(i64, rcPtr, "rc.val");
+	auto* newRc = builder->CreateSub(rcVal, llvm::ConstantInt::get(i64, 1), "rc.dec");
+	builder->CreateStore(newRc, rcPtr);
+
+	// If rc reaches 0, free the heap buffers and the rc itself.
+	auto* freeBB = llvm::BasicBlock::Create(*context, "rc.free", fn);
+	auto* contBB = llvm::BasicBlock::Create(*context, "rc.cont", fn);
+	auto* isZero = builder->CreateICmpEQ(newRc, llvm::ConstantInt::get(i64, 0), "rc.iszero");
+	builder->CreateCondBr(isZero, freeBB, contBB);
+
+	builder->SetInsertPoint(freeBB);
+	if (isMap) {
+		auto* keysPtr = builder->CreateLoad(ptrType,
+			builder->CreateStructGEP(structType, structAlloca, 0), "keys");
+		builder->CreateCall(freeFunc, {keysPtr});
+		auto* valsPtr = builder->CreateLoad(ptrType,
+			builder->CreateStructGEP(structType, structAlloca, 1), "vals");
+		builder->CreateCall(freeFunc, {valsPtr});
+	} else {
+		auto* dataPtr = builder->CreateLoad(ptrType,
+			builder->CreateStructGEP(structType, structAlloca, 0), "data");
+		builder->CreateCall(freeFunc, {dataPtr});
+	}
+	builder->CreateCall(freeFunc, {rcPtr});
+	builder->CreateBr(contBB);
+
+	builder->SetInsertPoint(contBB);
+}
+
+void CodeGen::emitScopeCleanup() {
+	auto& scope = scopes.back();
+	for (const auto& varName : scope.heapOwned) {
+		auto* alloca = scope.variables.at(varName);
+		std::string bfType = scope.varBFTypeNames.at(varName);
+		bool isMap = bfType.substr(0, 4) == "map<";
+		emitRefDecrement(alloca, isMap);
+	}
+}
+
+void CodeGen::declareVariable(const std::string& name, llvm::AllocaInst* alloca,
+							  llvm::Type* type, const std::string& bfTypeName) {
 	scopes.back().variables[name] = alloca;
 	scopes.back().varTypes[name] = type;
+	if (!bfTypeName.empty()) {
+		scopes.back().varBFTypeNames[name] = bfTypeName;
+	}
+	// Track heap-owning variables for refcount cleanup.
+	if (bfTypeName.substr(0, 6) == "array<" || bfTypeName.substr(0, 4) == "map<") {
+		scopes.back().heapOwned.push_back(name);
+	}
 }
 
 llvm::AllocaInst* CodeGen::lookupVariable(const std::string& name) {
@@ -96,6 +193,14 @@ llvm::Type* CodeGen::lookupVarType(const std::string& name) {
 		if (found != it->varTypes.end()) return found->second;
 	}
 	throw CodeGenError("Undefined variable type: " + name);
+}
+
+std::string CodeGen::lookupVarBFTypeName(const std::string& name) {
+	for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
+		auto found = it->varBFTypeNames.find(name);
+		if (found != it->varBFTypeNames.end()) return found->second;
+	}
+	return "";  // no BF type name tracked
 }
 
 llvm::AllocaInst* CodeGen::createEntryBlockAlloca(llvm::Function* fn,
@@ -116,6 +221,24 @@ llvm::Type* CodeGen::getLLVMType(const TypeNode& type) {
 	if (type.name == "char") return llvm::Type::getInt8Ty(*context);
 	if (type.name == "string") return llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(*context));
 	if (type.name == "void") return llvm::Type::getVoidTy(*context);
+
+	// User-defined struct type
+	auto structIt = structRegistry.find(type.name);
+	if (structIt != structRegistry.end()) {
+		return structIt->second.llvmType;
+	}
+
+	// Parameterized types
+	if (type.name == "array" && type.typeParams.size() == 1) {
+		llvm::Type* elemType = getLLVMType(*type.typeParams[0]);
+		return getOrCreateArrayType(elemType);
+	}
+	if (type.name == "map" && type.typeParams.size() == 2) {
+		llvm::Type* keyType = getLLVMType(*type.typeParams[0]);
+		llvm::Type* valType = getLLVMType(*type.typeParams[1]);
+		return getOrCreateMapType(keyType, valType);
+	}
+
 	throw CodeGenError("Unsupported type: " + type.name);
 }
 
@@ -125,6 +248,536 @@ bool CodeGen::isStringType(llvm::Type* type) const {
 
 bool CodeGen::isFloatType(llvm::Type* type) const {
 	return type->isDoubleTy() || type->isFloatTy();
+}
+
+std::string CodeGen::getFormatSpecifier(llvm::Type* type) const {
+	if (type->isPointerTy()) return "%s";
+	if (type->isDoubleTy() || type->isFloatTy()) return "%g";
+	if (type->isIntegerTy(1)) return "%s";  // bool — handled specially
+	if (type->isIntegerTy(8)) return "%c";
+	return "%ld";  // i64 or other int
+}
+
+// ==========================
+// Struct support
+// ==========================
+
+void CodeGen::registerStructTypes(const Program& program) {
+	for (const auto& sd : program.structs) {
+		StructInfo info;
+
+		// Collect field types.
+		std::vector<llvm::Type*> fieldTypes;
+		for (const auto& member : sd->members) {
+			if (member.kind == StructMember::FIELD) {
+				llvm::Type* ft = getLLVMType(*member.fieldType);
+				info.fieldNames.push_back(member.fieldName);
+				info.fieldLLVMTypes.push_back(ft);
+				info.fieldIndices[member.fieldName] = fieldTypes.size();
+				fieldTypes.push_back(ft);
+			}
+		}
+
+		info.llvmType = llvm::StructType::create(*context, fieldTypes, sd->name);
+
+		// Register method names.
+		for (const auto& member : sd->members) {
+			if (member.kind == StructMember::METHOD) {
+				std::string mangledName = sd->name + "." + member.method->name;
+				info.methods[member.method->name] = mangledName;
+				if (member.method->name == "constructor") {
+					info.hasConstructor = true;
+				}
+			}
+		}
+
+		structRegistry[sd->name] = std::move(info);
+	}
+}
+
+void CodeGen::generateStructMethods(const Program& program) {
+	for (const auto& sd : program.structs) {
+		auto& info = structRegistry.at(sd->name);
+
+		for (const auto& member : sd->members) {
+			if (member.kind != StructMember::METHOD) continue;
+			const auto& fn = *member.method;
+			std::string mangledName = sd->name + "." + fn.name;
+
+			// Build parameter types: first is pointer to struct (this), then regular params.
+			std::vector<llvm::Type*> paramTypes;
+			auto* ptrType = llvm::PointerType::getUnqual(*context);
+			paramTypes.push_back(ptrType);  // this pointer
+
+			for (const auto& param : fn.params) {
+				paramTypes.push_back(getLLVMType(*param.type));
+			}
+
+			llvm::Type* retType = getLLVMType(*fn.returnType);
+			auto funcType = llvm::FunctionType::get(retType, paramTypes, false);
+
+			llvm::Function* function = llvm::Function::Create(
+				funcType, llvm::Function::ExternalLinkage, mangledName, module.get());
+
+			// Set parameter names.
+			auto argIt = function->arg_begin();
+			argIt->setName("this");
+			++argIt;
+			for (size_t i = 0; i < fn.params.size(); i++, ++argIt) {
+				argIt->setName(fn.params[i].name);
+			}
+
+			auto* entry = llvm::BasicBlock::Create(*context, "entry", function);
+			builder->SetInsertPoint(entry);
+
+			pushScope();
+
+			// Store 'this' pointer in an alloca.
+			auto thisAlloca = createEntryBlockAlloca(function, "this", ptrType);
+			builder->CreateStore(&*function->arg_begin(), thisAlloca);
+			declareVariable("this", thisAlloca, ptrType, sd->name);
+
+			// Store regular parameters.
+			argIt = function->arg_begin();
+			++argIt;  // skip 'this'
+			for (size_t i = 0; i < fn.params.size(); i++, ++argIt) {
+				llvm::Type* paramType = getLLVMType(*fn.params[i].type);
+				auto alloca = createEntryBlockAlloca(function, fn.params[i].name, paramType);
+				builder->CreateStore(&*argIt, alloca);
+				declareVariable(fn.params[i].name, alloca, paramType);
+			}
+
+			// Generate body.
+			for (const auto& stmt : fn.body.statements) {
+				generateStatement(*stmt);
+				if (builder->GetInsertBlock()->getTerminator()) break;
+			}
+
+			if (!builder->GetInsertBlock()->getTerminator()) {
+				if (retType->isVoidTy()) {
+					builder->CreateRetVoid();
+				} else {
+					builder->CreateRet(llvm::Constant::getNullValue(retType));
+				}
+			}
+
+			popScope();
+		}
+	}
+}
+
+void CodeGen::generateStructInit(const StructInitExpr& expr, llvm::Value* basePtr,
+								 const std::string& structName) {
+	auto& info = structRegistry.at(structName);
+
+	for (const auto& [fieldName, fieldExpr] : expr.fields) {
+		auto idxIt = info.fieldIndices.find(fieldName);
+		if (idxIt == info.fieldIndices.end()) {
+			throw CodeGenError("Unknown field '" + fieldName + "' in struct " + structName);
+		}
+		size_t idx = idxIt->second;
+		auto* fieldPtr = builder->CreateStructGEP(info.llvmType, basePtr, idx, fieldName + ".ptr");
+
+		// Handle nested struct init: center: { x: 10, y: 20 }
+		if (auto* nestedInit = dynamic_cast<const StructInitExpr*>(fieldExpr.get())) {
+			llvm::Type* fieldType = info.fieldLLVMTypes[idx];
+			if (auto* st = llvm::dyn_cast<llvm::StructType>(fieldType)) {
+				if (st->hasName()) {
+					generateStructInit(*nestedInit, fieldPtr, st->getName().str());
+					continue;
+				}
+			}
+		}
+
+		llvm::Value* val = generateExpression(*fieldExpr);
+		builder->CreateStore(val, fieldPtr);
+	}
+}
+
+std::pair<llvm::Value*, std::string> CodeGen::resolveStructBase(const Expression& expr) {
+	if (auto* ident = dynamic_cast<const IdentifierExpr*>(&expr)) {
+		std::string structName = lookupVarBFTypeName(ident->name);
+		llvm::Type* varType = lookupVarType(ident->name);
+		llvm::Value* basePtr;
+		if (varType->isStructTy()) {
+			basePtr = lookupVariable(ident->name);
+		} else {
+			basePtr = builder->CreateLoad(varType, lookupVariable(ident->name), ident->name + ".ptr");
+		}
+		return {basePtr, structName};
+	}
+	if (dynamic_cast<const ThisExpr*>(&expr)) {
+		std::string structName = lookupVarBFTypeName("this");
+		llvm::Type* thisType = lookupVarType("this");
+		llvm::Value* basePtr = builder->CreateLoad(thisType, lookupVariable("this"), "this.ptr");
+		return {basePtr, structName};
+	}
+	if (auto* member = dynamic_cast<const MemberAccessExpr*>(&expr)) {
+		// Chained access: resolve parent, GEP to intermediate field
+		auto [parentPtr, parentStructName] = resolveStructBase(*member->object);
+		auto& parentInfo = structRegistry.at(parentStructName);
+		auto fieldIt = parentInfo.fieldIndices.find(member->member);
+		if (fieldIt == parentInfo.fieldIndices.end()) {
+			throw CodeGenError("Unknown field: " + member->member + " on struct " + parentStructName);
+		}
+		size_t idx = fieldIt->second;
+		auto* fieldPtr = builder->CreateStructGEP(parentInfo.llvmType, parentPtr, idx, member->member + ".ptr");
+
+		// Determine BF type name of this field
+		llvm::Type* fieldType = parentInfo.fieldLLVMTypes[idx];
+		std::string fieldStructName;
+		if (auto* st = llvm::dyn_cast<llvm::StructType>(fieldType)) {
+			if (st->hasName()) {
+				fieldStructName = st->getName().str();
+			}
+		}
+		return {fieldPtr, fieldStructName};
+	}
+	throw CodeGenError("Cannot resolve struct base for expression");
+}
+
+// ==========================
+// Array support
+// ==========================
+
+llvm::StructType* CodeGen::getOrCreateArrayType(llvm::Type* elemType) {
+	// Array struct: { elem_ptr*, i64 length, i64 capacity, i64* refcount }
+	auto* ptrType = llvm::PointerType::getUnqual(*context);
+	auto* i64 = llvm::Type::getInt64Ty(*context);
+	return llvm::StructType::get(*context, {ptrType, i64, i64, ptrType});
+}
+
+llvm::Value* CodeGen::generateArrayLiteral(const ArrayLiteralExpr& expr, llvm::Type* elemType) {
+	auto* fn = builder->GetInsertBlock()->getParent();
+	auto* arrType = getOrCreateArrayType(elemType);
+	auto* i64 = llvm::Type::getInt64Ty(*context);
+	size_t count = expr.elements.size();
+
+	// Allocate the array struct on the stack.
+	auto alloca = createEntryBlockAlloca(fn, "arr", arrType);
+
+	// Compute element size + malloc data buffer.
+	uint64_t elemSize = module->getDataLayout().getTypeAllocSize(elemType);
+	llvm::Value* bufSize = llvm::ConstantInt::get(i64, count * elemSize);
+	llvm::Value* buf = builder->CreateCall(mallocFunc, {bufSize}, "arr.data");
+
+	// Store elements.
+	for (size_t i = 0; i < count; i++) {
+		llvm::Value* val = generateExpression(*expr.elements[i]);
+		llvm::Value* elemPtr = builder->CreateGEP(elemType, buf, llvm::ConstantInt::get(i64, i), "elem.ptr");
+		builder->CreateStore(val, elemPtr);
+	}
+
+	// Store into the struct: { data, length, capacity, refcount }
+	auto* dataPtr = builder->CreateStructGEP(arrType, alloca, 0, "arr.data.ptr");
+	builder->CreateStore(buf, dataPtr);
+	auto* lenPtr = builder->CreateStructGEP(arrType, alloca, 1, "arr.len.ptr");
+	builder->CreateStore(llvm::ConstantInt::get(i64, count), lenPtr);
+	auto* capPtr = builder->CreateStructGEP(arrType, alloca, 2, "arr.cap.ptr");
+	builder->CreateStore(llvm::ConstantInt::get(i64, count), capPtr);
+
+	// Allocate and init refcount to 1.
+	llvm::Value* rcBuf = builder->CreateCall(mallocFunc, {llvm::ConstantInt::get(i64, 8)}, "arr.rc");
+	builder->CreateStore(llvm::ConstantInt::get(i64, 1), rcBuf);
+	auto* rcPtr = builder->CreateStructGEP(arrType, alloca, 3, "arr.rc.ptr");
+	builder->CreateStore(rcBuf, rcPtr);
+
+	return alloca;
+}
+
+llvm::Value* CodeGen::generateEmptyArray(llvm::Type* elemType) {
+	auto* fn = builder->GetInsertBlock()->getParent();
+	auto* arrType = getOrCreateArrayType(elemType);
+	auto* i64 = llvm::Type::getInt64Ty(*context);
+
+	auto alloca = createEntryBlockAlloca(fn, "arr", arrType);
+
+	// Initial capacity of 8.
+	uint64_t initCap = 8;
+	uint64_t elemSize = module->getDataLayout().getTypeAllocSize(elemType);
+	llvm::Value* bufSize = llvm::ConstantInt::get(i64, initCap * elemSize);
+	llvm::Value* buf = builder->CreateCall(mallocFunc, {bufSize}, "arr.data");
+
+	auto* dataPtr = builder->CreateStructGEP(arrType, alloca, 0, "arr.data.ptr");
+	builder->CreateStore(buf, dataPtr);
+	auto* lenPtr = builder->CreateStructGEP(arrType, alloca, 1, "arr.len.ptr");
+	builder->CreateStore(llvm::ConstantInt::get(i64, 0), lenPtr);
+	auto* capPtr = builder->CreateStructGEP(arrType, alloca, 2, "arr.cap.ptr");
+	builder->CreateStore(llvm::ConstantInt::get(i64, initCap), capPtr);
+
+	// Allocate and init refcount to 1.
+	llvm::Value* rcBuf = builder->CreateCall(mallocFunc, {llvm::ConstantInt::get(i64, 8)}, "arr.rc");
+	builder->CreateStore(llvm::ConstantInt::get(i64, 1), rcBuf);
+	auto* rcPtr = builder->CreateStructGEP(arrType, alloca, 3, "arr.rc.ptr");
+	builder->CreateStore(rcBuf, rcPtr);
+
+	return alloca;
+}
+
+void CodeGen::generateArrayPush(llvm::AllocaInst* arrAlloca, llvm::Type* elemType, llvm::Value* value) {
+	auto* fn = builder->GetInsertBlock()->getParent();
+	auto* arrType = getOrCreateArrayType(elemType);
+	auto* i64 = llvm::Type::getInt64Ty(*context);
+	auto* ptrType = llvm::PointerType::getUnqual(*context);
+	uint64_t elemSize = module->getDataLayout().getTypeAllocSize(elemType);
+
+	// Load current length and capacity.
+	auto* lenPtr = builder->CreateStructGEP(arrType, arrAlloca, 1, "len.ptr");
+	auto* capPtr = builder->CreateStructGEP(arrType, arrAlloca, 2, "cap.ptr");
+	auto* dataPtr = builder->CreateStructGEP(arrType, arrAlloca, 0, "data.ptr");
+	llvm::Value* len = builder->CreateLoad(i64, lenPtr, "len");
+	llvm::Value* cap = builder->CreateLoad(i64, capPtr, "cap");
+	llvm::Value* data = builder->CreateLoad(ptrType, dataPtr, "data");
+
+	// Check if len >= cap: need to grow.
+	auto* needGrowBB = llvm::BasicBlock::Create(*context, "arr.grow", fn);
+	auto* pushBB = llvm::BasicBlock::Create(*context, "arr.push", fn);
+	llvm::Value* full = builder->CreateICmpSGE(len, cap, "full");
+	builder->CreateCondBr(full, needGrowBB, pushBB);
+
+	// Grow: double the capacity, realloc.
+	builder->SetInsertPoint(needGrowBB);
+	llvm::Value* newCap = builder->CreateMul(cap, llvm::ConstantInt::get(i64, 2), "newcap");
+	llvm::Value* newSize = builder->CreateMul(newCap, llvm::ConstantInt::get(i64, elemSize), "newsize");
+	llvm::Value* newData = builder->CreateCall(reallocFunc, {data, newSize}, "newdata");
+	builder->CreateStore(newData, dataPtr);
+	builder->CreateStore(newCap, capPtr);
+	builder->CreateBr(pushBB);
+
+	// Push: store element at data[len], increment length.
+	// Re-load data pointer since it may have been updated by realloc.
+	builder->SetInsertPoint(pushBB);
+	llvm::Value* curData = builder->CreateLoad(ptrType, dataPtr, "curdata");
+	llvm::Value* elemPtr = builder->CreateGEP(elemType, curData, len, "push.ptr");
+	builder->CreateStore(value, elemPtr);
+	llvm::Value* newLen = builder->CreateAdd(len, llvm::ConstantInt::get(i64, 1), "newlen");
+	builder->CreateStore(newLen, lenPtr);
+}
+
+// ==========================
+// Map support
+// ==========================
+
+llvm::StructType* CodeGen::getOrCreateMapType(llvm::Type* keyType, llvm::Type* valType) {
+	// Map struct: { keys_ptr*, values_ptr*, i64 length, i64 capacity, i64* refcount }
+	auto* ptrType = llvm::PointerType::getUnqual(*context);
+	auto* i64 = llvm::Type::getInt64Ty(*context);
+	return llvm::StructType::get(*context, {ptrType, ptrType, i64, i64, ptrType});
+}
+
+llvm::Value* CodeGen::generateEmptyMap(llvm::Type* keyType, llvm::Type* valType) {
+	auto* fn = builder->GetInsertBlock()->getParent();
+	auto* mapType = getOrCreateMapType(keyType, valType);
+	auto* i64 = llvm::Type::getInt64Ty(*context);
+	auto* ptrType = llvm::PointerType::getUnqual(*context);
+
+	auto alloca = createEntryBlockAlloca(fn, "map", mapType);
+
+	uint64_t initCap = 16;
+	uint64_t keySize = module->getDataLayout().getTypeAllocSize(keyType);
+	uint64_t valSize = module->getDataLayout().getTypeAllocSize(valType);
+
+	llvm::Value* keyBuf = builder->CreateCall(mallocFunc,
+		{llvm::ConstantInt::get(i64, initCap * keySize)}, "map.keys");
+	llvm::Value* valBuf = builder->CreateCall(mallocFunc,
+		{llvm::ConstantInt::get(i64, initCap * valSize)}, "map.vals");
+
+	builder->CreateStore(keyBuf, builder->CreateStructGEP(mapType, alloca, 0, "keys.ptr"));
+	builder->CreateStore(valBuf, builder->CreateStructGEP(mapType, alloca, 1, "vals.ptr"));
+	builder->CreateStore(llvm::ConstantInt::get(i64, 0),
+						 builder->CreateStructGEP(mapType, alloca, 2, "len.ptr"));
+	builder->CreateStore(llvm::ConstantInt::get(i64, initCap),
+						 builder->CreateStructGEP(mapType, alloca, 3, "cap.ptr"));
+
+	// Allocate and init refcount to 1.
+	llvm::Value* rcBuf = builder->CreateCall(mallocFunc, {llvm::ConstantInt::get(i64, 8)}, "map.rc");
+	builder->CreateStore(llvm::ConstantInt::get(i64, 1), rcBuf);
+	builder->CreateStore(rcBuf, builder->CreateStructGEP(mapType, alloca, 4, "map.rc.ptr"));
+
+	return alloca;
+}
+
+void CodeGen::generateMapSet(llvm::AllocaInst* mapAlloca, llvm::Type* keyType, llvm::Type* valType,
+							 llvm::Value* key, llvm::Value* val) {
+	auto* fn = builder->GetInsertBlock()->getParent();
+	auto* mapType = getOrCreateMapType(keyType, valType);
+	auto* i64 = llvm::Type::getInt64Ty(*context);
+	auto* ptrType = llvm::PointerType::getUnqual(*context);
+
+	uint64_t keySize = module->getDataLayout().getTypeAllocSize(keyType);
+	uint64_t valSize = module->getDataLayout().getTypeAllocSize(valType);
+
+	llvm::Value* keys = builder->CreateLoad(ptrType,
+		builder->CreateStructGEP(mapType, mapAlloca, 0), "keys");
+	llvm::Value* vals = builder->CreateLoad(ptrType,
+		builder->CreateStructGEP(mapType, mapAlloca, 1), "vals");
+	llvm::Value* len = builder->CreateLoad(i64,
+		builder->CreateStructGEP(mapType, mapAlloca, 2), "len");
+	llvm::Value* cap = builder->CreateLoad(i64,
+		builder->CreateStructGEP(mapType, mapAlloca, 3), "cap");
+
+	// Linear search loop: for (i = 0; i < len; i++) if (keys[i] == key) { vals[i] = val; return; }
+	auto* loopBB = llvm::BasicBlock::Create(*context, "map.search", fn);
+	auto* foundBB = llvm::BasicBlock::Create(*context, "map.found", fn);
+	auto* notFoundBB = llvm::BasicBlock::Create(*context, "map.notfound", fn);
+	auto* appendBB = llvm::BasicBlock::Create(*context, "map.append", fn);
+	auto* growBB = llvm::BasicBlock::Create(*context, "map.grow", fn);
+	auto* doneBB = llvm::BasicBlock::Create(*context, "map.done", fn);
+
+	builder->CreateBr(loopBB);
+
+	// Loop header
+	builder->SetInsertPoint(loopBB);
+	auto* iPhi = builder->CreatePHI(i64, 2, "i");
+	iPhi->addIncoming(llvm::ConstantInt::get(i64, 0), loopBB->getSinglePredecessor());
+
+	llvm::Value* inBounds = builder->CreateICmpSLT(iPhi, len, "inbounds");
+	auto* bodyBB = llvm::BasicBlock::Create(*context, "map.body", fn, foundBB);
+	builder->CreateCondBr(inBounds, bodyBB, notFoundBB);
+
+	// Loop body: compare keys[i] with key
+	builder->SetInsertPoint(bodyBB);
+	llvm::Value* keyPtr = builder->CreateGEP(keyType, keys, iPhi, "key.ptr");
+	llvm::Value* curKey = builder->CreateLoad(keyType, keyPtr, "curkey");
+	llvm::Value* match;
+	if (keyType->isIntegerTy()) {
+		match = builder->CreateICmpEQ(curKey, key, "keymatch");
+	} else if (isStringType(keyType)) {
+		llvm::Value* cmp = builder->CreateCall(strcmpFunc, {curKey, key}, "strcmp");
+		match = builder->CreateICmpEQ(cmp, llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0), "keymatch");
+	} else if (isFloatType(keyType)) {
+		match = builder->CreateFCmpOEQ(curKey, key, "keymatch");
+	} else {
+		match = builder->CreateICmpEQ(curKey, key, "keymatch");
+	}
+
+	// Compute next index BEFORE the terminator.
+	llvm::Value* iNext = builder->CreateAdd(iPhi, llvm::ConstantInt::get(i64, 1), "i.next");
+
+	// Create an increment block that branches to the loop header.
+	auto* incBB = llvm::BasicBlock::Create(*context, "map.inc", fn, foundBB);
+	builder->CreateCondBr(match, foundBB, incBB);
+
+	builder->SetInsertPoint(incBB);
+	builder->CreateBr(loopBB);
+	iPhi->addIncoming(iNext, incBB);
+
+	// Found: update value
+	builder->SetInsertPoint(foundBB);
+	auto* foundI = builder->CreatePHI(i64, 1, "found.i");
+	foundI->addIncoming(iPhi, bodyBB);
+	llvm::Value* valPtr = builder->CreateGEP(valType, vals, foundI, "val.ptr");
+	builder->CreateStore(val, valPtr);
+	builder->CreateBr(doneBB);
+
+	// Not found: check capacity, grow if needed, then append
+	builder->SetInsertPoint(notFoundBB);
+	llvm::Value* needGrow = builder->CreateICmpSGE(len, cap, "needgrow");
+	builder->CreateCondBr(needGrow, growBB, appendBB);
+
+	// Grow
+	builder->SetInsertPoint(growBB);
+	llvm::Value* newCap = builder->CreateMul(cap, llvm::ConstantInt::get(i64, 2), "newcap");
+	llvm::Value* newKeyBuf = builder->CreateCall(reallocFunc,
+		{keys, builder->CreateMul(newCap, llvm::ConstantInt::get(i64, keySize))}, "newkeys");
+	llvm::Value* newValBuf = builder->CreateCall(reallocFunc,
+		{vals, builder->CreateMul(newCap, llvm::ConstantInt::get(i64, valSize))}, "newvals");
+	builder->CreateStore(newKeyBuf, builder->CreateStructGEP(mapType, mapAlloca, 0));
+	builder->CreateStore(newValBuf, builder->CreateStructGEP(mapType, mapAlloca, 1));
+	builder->CreateStore(newCap, builder->CreateStructGEP(mapType, mapAlloca, 3));
+	builder->CreateBr(appendBB);
+
+	// Append
+	builder->SetInsertPoint(appendBB);
+	auto* keysP = builder->CreatePHI(ptrType, 2, "keys.phi");
+	keysP->addIncoming(keys, notFoundBB);
+	keysP->addIncoming(newKeyBuf, growBB);
+	auto* valsP = builder->CreatePHI(ptrType, 2, "vals.phi");
+	valsP->addIncoming(vals, notFoundBB);
+	valsP->addIncoming(newValBuf, growBB);
+
+	llvm::Value* newKeyPtr = builder->CreateGEP(keyType, keysP, len, "newkey.ptr");
+	builder->CreateStore(key, newKeyPtr);
+	llvm::Value* newValPtr = builder->CreateGEP(valType, valsP, len, "newval.ptr");
+	builder->CreateStore(val, newValPtr);
+	llvm::Value* newLen = builder->CreateAdd(len, llvm::ConstantInt::get(i64, 1), "newlen");
+	builder->CreateStore(newLen, builder->CreateStructGEP(mapType, mapAlloca, 2));
+	builder->CreateBr(doneBB);
+
+	builder->SetInsertPoint(doneBB);
+}
+
+llvm::Value* CodeGen::generateMapGet(llvm::AllocaInst* mapAlloca, llvm::Type* keyType,
+									 llvm::Type* valType, llvm::Value* key) {
+	auto* fn = builder->GetInsertBlock()->getParent();
+	auto* mapType = getOrCreateMapType(keyType, valType);
+	auto* i64 = llvm::Type::getInt64Ty(*context);
+	auto* ptrType = llvm::PointerType::getUnqual(*context);
+
+	llvm::Value* keys = builder->CreateLoad(ptrType,
+		builder->CreateStructGEP(mapType, mapAlloca, 0), "keys");
+	llvm::Value* vals = builder->CreateLoad(ptrType,
+		builder->CreateStructGEP(mapType, mapAlloca, 1), "vals");
+	llvm::Value* len = builder->CreateLoad(i64,
+		builder->CreateStructGEP(mapType, mapAlloca, 2), "len");
+
+	// Linear search
+	auto* loopBB = llvm::BasicBlock::Create(*context, "mapget.loop", fn);
+	auto* foundBB = llvm::BasicBlock::Create(*context, "mapget.found", fn);
+	auto* defaultBB = llvm::BasicBlock::Create(*context, "mapget.default", fn);
+	auto* doneBB = llvm::BasicBlock::Create(*context, "mapget.done", fn);
+
+	builder->CreateBr(loopBB);
+
+	builder->SetInsertPoint(loopBB);
+	auto* iPhi = builder->CreatePHI(i64, 2, "i");
+	iPhi->addIncoming(llvm::ConstantInt::get(i64, 0), loopBB->getSinglePredecessor());
+
+	llvm::Value* inBounds = builder->CreateICmpSLT(iPhi, len, "inbounds");
+	auto* bodyBB = llvm::BasicBlock::Create(*context, "mapget.body", fn, foundBB);
+	builder->CreateCondBr(inBounds, bodyBB, defaultBB);
+
+	builder->SetInsertPoint(bodyBB);
+	llvm::Value* keyPtr = builder->CreateGEP(keyType, keys, iPhi, "key.ptr");
+	llvm::Value* curKey = builder->CreateLoad(keyType, keyPtr, "curkey");
+	llvm::Value* match;
+	if (keyType->isIntegerTy()) {
+		match = builder->CreateICmpEQ(curKey, key, "keymatch");
+	} else if (isStringType(keyType)) {
+		llvm::Value* cmp = builder->CreateCall(strcmpFunc, {curKey, key}, "strcmp");
+		match = builder->CreateICmpEQ(cmp, llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0), "keymatch");
+	} else {
+		match = builder->CreateICmpEQ(curKey, key, "keymatch");
+	}
+
+	// Compute next index BEFORE the terminator.
+	llvm::Value* iNext = builder->CreateAdd(iPhi, llvm::ConstantInt::get(i64, 1), "i.next");
+
+	auto* incBB = llvm::BasicBlock::Create(*context, "mapget.inc", fn, foundBB);
+	builder->CreateCondBr(match, foundBB, incBB);
+
+	builder->SetInsertPoint(incBB);
+	builder->CreateBr(loopBB);
+	iPhi->addIncoming(iNext, incBB);
+
+	// Found
+	builder->SetInsertPoint(foundBB);
+	auto* foundI = builder->CreatePHI(i64, 1, "found.i");
+	foundI->addIncoming(iPhi, bodyBB);
+	llvm::Value* valPtr = builder->CreateGEP(valType, vals, foundI, "val.ptr");
+	llvm::Value* foundVal = builder->CreateLoad(valType, valPtr, "foundval");
+	builder->CreateBr(doneBB);
+
+	// Default (key not found): return zero value
+	builder->SetInsertPoint(defaultBB);
+	llvm::Value* defaultVal = llvm::Constant::getNullValue(valType);
+	builder->CreateBr(doneBB);
+
+	builder->SetInsertPoint(doneBB);
+	auto* result = builder->CreatePHI(valType, 2, "mapget.result");
+	result->addIncoming(foundVal, foundBB);
+	result->addIncoming(defaultVal, defaultBB);
+	return result;
 }
 
 // ==========================
@@ -176,6 +829,8 @@ void CodeGen::generateFunction(const FunctionDecl& fn) {
 
 	// If the function is void and doesn't end with a return, add one.
 	if (!builder->GetInsertBlock()->getTerminator()) {
+		// Emit refcount cleanup before the implicit return.
+		emitScopeCleanup();
 		if (retType->isVoidTy()) {
 			builder->CreateRetVoid();
 		} else {
@@ -235,19 +890,103 @@ void CodeGen::generateStatement(const Statement& stmt) {
 void CodeGen::generateVarDecl(const VarDeclStmt& stmt) {
 	auto* fn = builder->GetInsertBlock()->getParent();
 	llvm::Type* varType = nullptr;
+	std::string bfTypeName;
 
 	if (stmt.type) {
 		varType = getLLVMType(*stmt.type);
+		bfTypeName = stmt.type->name;
+
+		// Handle array<T> type params
+		if (bfTypeName == "array" && stmt.type->typeParams.size() == 1) {
+			bfTypeName = "array<" + stmt.type->typeParams[0]->name + ">";
+		}
+		// Handle map<K,V> type params
+		if (bfTypeName == "map" && stmt.type->typeParams.size() == 2) {
+			bfTypeName = "map<" + stmt.type->typeParams[0]->name + "," + stmt.type->typeParams[1]->name + ">";
+		}
 	} else if (stmt.isWalrus && stmt.initializer) {
 		// Infer type from initializer.
 		llvm::Value* initVal = generateExpression(*stmt.initializer);
 		varType = initVal->getType();
 		auto alloca = createEntryBlockAlloca(fn, stmt.name, varType);
 		builder->CreateStore(initVal, alloca);
+		// If the inferred type is a registered struct, track its BF type name.
+		if (varType->isStructTy()) {
+			auto* st = llvm::cast<llvm::StructType>(varType);
+			if (st->hasName()) {
+				std::string name = st->getName().str();
+				if (structRegistry.count(name)) {
+					declareVariable(stmt.name, alloca, varType, name);
+					return;
+				}
+			}
+		}
 		declareVariable(stmt.name, alloca, varType);
 		return;
 	} else {
 		throw CodeGenError("Cannot infer type for variable: " + stmt.name);
+	}
+
+	// Check for struct type: special initialization.
+	if (varType->isStructTy()) {
+		auto structIt = structRegistry.find(bfTypeName);
+		if (structIt != structRegistry.end()) {
+			// It's a struct variable.
+			auto alloca = createEntryBlockAlloca(fn, stmt.name, varType);
+			if (stmt.initializer) {
+				if (auto* structInit = dynamic_cast<const StructInitExpr*>(stmt.initializer.get())) {
+					generateStructInit(*structInit, alloca, bfTypeName);
+				} else {
+					llvm::Value* initVal = generateExpression(*stmt.initializer);
+					builder->CreateStore(initVal, alloca);
+				}
+			} else {
+				// Zero-init struct.
+				builder->CreateStore(llvm::Constant::getNullValue(varType), alloca);
+			}
+			declareVariable(stmt.name, alloca, varType, bfTypeName);
+			return;
+		}
+
+		// It's an array or map type (those are also LLVM struct types).
+		if (bfTypeName.substr(0, 6) == "array<") {
+			auto alloca = createEntryBlockAlloca(fn, stmt.name, varType);
+			if (stmt.initializer) {
+				if (auto* arrLit = dynamic_cast<const ArrayLiteralExpr*>(stmt.initializer.get())) {
+					// Extract element type from the BF type.
+					llvm::Type* elemType = getLLVMType(*stmt.type->typeParams[0]);
+					// Generate the literal into a temporary alloca, then copy.
+					auto* tmpAlloca = static_cast<llvm::AllocaInst*>(
+						generateArrayLiteral(*arrLit, elemType));
+					// Copy the struct fields.
+					llvm::Value* tmpVal = builder->CreateLoad(varType, tmpAlloca, "arr.tmp");
+					builder->CreateStore(tmpVal, alloca);
+				} else {
+					llvm::Value* initVal = generateExpression(*stmt.initializer);
+					builder->CreateStore(initVal, alloca);
+				}
+			} else {
+				// Empty array with initial capacity.
+				llvm::Type* elemType = getLLVMType(*stmt.type->typeParams[0]);
+				auto* tmpAlloca = static_cast<llvm::AllocaInst*>(generateEmptyArray(elemType));
+				llvm::Value* tmpVal = builder->CreateLoad(varType, tmpAlloca, "arr.tmp");
+				builder->CreateStore(tmpVal, alloca);
+			}
+			declareVariable(stmt.name, alloca, varType, bfTypeName);
+			return;
+		}
+
+		if (bfTypeName.substr(0, 4) == "map<") {
+			auto alloca = createEntryBlockAlloca(fn, stmt.name, varType);
+			// Maps are always initialized empty.
+			llvm::Type* keyType = getLLVMType(*stmt.type->typeParams[0]);
+			llvm::Type* valType2 = getLLVMType(*stmt.type->typeParams[1]);
+			auto* tmpAlloca = static_cast<llvm::AllocaInst*>(generateEmptyMap(keyType, valType2));
+			llvm::Value* tmpVal = builder->CreateLoad(varType, tmpAlloca, "map.tmp");
+			builder->CreateStore(tmpVal, alloca);
+			declareVariable(stmt.name, alloca, varType, bfTypeName);
+			return;
+		}
 	}
 
 	auto alloca = createEntryBlockAlloca(fn, stmt.name, varType);
@@ -264,7 +1003,7 @@ void CodeGen::generateVarDecl(const VarDeclStmt& stmt) {
 		builder->CreateStore(llvm::Constant::getNullValue(varType), alloca);
 	}
 
-	declareVariable(stmt.name, alloca, varType);
+	declareVariable(stmt.name, alloca, varType, bfTypeName);
 }
 
 // ==========================
@@ -272,6 +1011,35 @@ void CodeGen::generateVarDecl(const VarDeclStmt& stmt) {
 // ==========================
 
 void CodeGen::generateAssign(const AssignStmt& stmt) {
+	// Check for map index assignment: map[key] = val
+	if (auto* indexExpr = dynamic_cast<const IndexExpr*>(stmt.target.get())) {
+		if (auto* ident = dynamic_cast<const IdentifierExpr*>(indexExpr->object.get())) {
+			std::string bfType = lookupVarBFTypeName(ident->name);
+			if (bfType.substr(0, 4) == "map<") {
+				// Extract K,V type names from bfType string.
+				auto commaPos = bfType.find(',', 4);
+				std::string keyTypeName = bfType.substr(4, commaPos - 4);
+				std::string valTypeName = bfType.substr(commaPos + 1, bfType.size() - commaPos - 2);
+
+				TypeNode keyTN(keyTypeName);
+				TypeNode valTN(valTypeName);
+				llvm::Type* keyType = getLLVMType(keyTN);
+				llvm::Type* valType = getLLVMType(valTN);
+
+				auto* mapAlloca = lookupVariable(ident->name);
+				llvm::Value* key = generateExpression(*indexExpr->index);
+				llvm::Value* val = generateExpression(*stmt.value);
+
+				if (stmt.op == "=") {
+					generateMapSet(mapAlloca, keyType, valType, key, val);
+				} else {
+					throw CodeGenError("Compound assignment on map elements not supported");
+				}
+				return;
+			}
+		}
+	}
+
 	llvm::Value* ptr = generateLValue(*stmt.target);
 	llvm::Value* rhs = generateExpression(*stmt.value);
 
@@ -279,6 +1047,17 @@ void CodeGen::generateAssign(const AssignStmt& stmt) {
 	// Get the type from the lvalue.
 	if (auto* ident = dynamic_cast<const IdentifierExpr*>(stmt.target.get())) {
 		ptrElemType = lookupVarType(ident->name);
+	} else if (auto* indexExpr = dynamic_cast<const IndexExpr*>(stmt.target.get())) {
+		// For array index assignment, the element type comes from the array's BF type.
+		if (auto* ident = dynamic_cast<const IdentifierExpr*>(indexExpr->object.get())) {
+			std::string bfType = lookupVarBFTypeName(ident->name);
+			if (bfType.substr(0, 6) == "array<") {
+				std::string elemTypeName = bfType.substr(6, bfType.size() - 7);
+				TypeNode tn(elemTypeName);
+				ptrElemType = getLLVMType(tn);
+			}
+		}
+		if (!ptrElemType) ptrElemType = rhs->getType();
 	} else {
 		ptrElemType = rhs->getType();
 	}
@@ -315,6 +1094,41 @@ void CodeGen::generateAssign(const AssignStmt& stmt) {
 llvm::Value* CodeGen::generateLValue(const Expression& expr) {
 	if (auto* ident = dynamic_cast<const IdentifierExpr*>(&expr)) {
 		return lookupVariable(ident->name);
+	}
+	// Index lvalue: arr[i]
+	if (auto* indexExpr = dynamic_cast<const IndexExpr*>(&expr)) {
+		if (auto* ident = dynamic_cast<const IdentifierExpr*>(indexExpr->object.get())) {
+			std::string bfType = lookupVarBFTypeName(ident->name);
+			if (bfType.substr(0, 6) == "array<") {
+				std::string elemTypeName = bfType.substr(6, bfType.size() - 7);
+				TypeNode tn(elemTypeName);
+				llvm::Type* elemType = getLLVMType(tn);
+				auto* arrAlloca = lookupVariable(ident->name);
+				auto* arrType = getOrCreateArrayType(elemType);
+				auto* ptrType = llvm::PointerType::getUnqual(*context);
+
+				llvm::Value* data = builder->CreateLoad(ptrType,
+					builder->CreateStructGEP(arrType, arrAlloca, 0), "data");
+				llvm::Value* idx = generateExpression(*indexExpr->index);
+				return builder->CreateGEP(elemType, data, idx, "elem.ptr");
+			}
+		}
+	}
+	// Member access lvalue: obj.field (supports chained access)
+	if (auto* memberExpr = dynamic_cast<const MemberAccessExpr*>(&expr)) {
+		auto [basePtr, structName] = resolveStructBase(*memberExpr->object);
+
+		auto structIt = structRegistry.find(structName);
+		if (structIt == structRegistry.end()) {
+			throw CodeGenError("Unknown struct type: " + structName);
+		}
+		auto& info = structIt->second;
+		auto fieldIt = info.fieldIndices.find(memberExpr->member);
+		if (fieldIt == info.fieldIndices.end()) {
+			throw CodeGenError("Unknown field: " + memberExpr->member);
+		}
+		return builder->CreateStructGEP(info.llvmType, basePtr, fieldIt->second,
+										memberExpr->member + ".ptr");
 	}
 	throw CodeGenError("Invalid assignment target");
 }
@@ -634,16 +1448,14 @@ void CodeGen::generateMatch(const MatchStmt& stmt) {
 		}
 
 		// Determine next condition block.
-		llvm::BasicBlock* nextCondBB = nullptr;
-		// Find the next non-default case.
 		bool foundNext = false;
 		for (size_t j = i + 1; j < cases.size(); j++) {
 			if (!cases[j].mc->isDefault) {
-				nextCondBB = llvm::BasicBlock::Create(*context, "match.check", fn, cases[j].bodyBB);
-				foundNext = true;
+				auto* nextCondBB = llvm::BasicBlock::Create(*context, "match.check", fn, cases[j].bodyBB);
 
 				builder->CreateCondBr(matchCond, cases[i].bodyBB, nextCondBB);
 				builder->SetInsertPoint(nextCondBB);
+				foundNext = true;
 				break;
 			}
 		}
@@ -652,8 +1464,7 @@ void CodeGen::generateMatch(const MatchStmt& stmt) {
 		}
 	}
 
-	// If we're still at a non-terminated block (should not happen normally),
-	// branch to fallthrough.
+	// If we're still at a non-terminated block, branch to fallthrough.
 	if (!builder->GetInsertBlock()->getTerminator()) {
 		builder->CreateBr(fallthrough);
 	}
@@ -680,8 +1491,26 @@ void CodeGen::generateMatch(const MatchStmt& stmt) {
 void CodeGen::generateReturn(const ReturnStmt& stmt) {
 	if (stmt.value) {
 		llvm::Value* val = generateExpression(*stmt.value);
+		// Emit refcount cleanup for all active scopes before returning.
+		for (auto& scope : scopes) {
+			for (const auto& varName : scope.heapOwned) {
+				auto* alloca = scope.variables.at(varName);
+				std::string bfType = scope.varBFTypeNames.at(varName);
+				bool isMap = bfType.substr(0, 4) == "map<";
+				emitRefDecrement(alloca, isMap);
+			}
+		}
 		builder->CreateRet(val);
 	} else {
+		// Emit refcount cleanup for all active scopes before returning.
+		for (auto& scope : scopes) {
+			for (const auto& varName : scope.heapOwned) {
+				auto* alloca = scope.variables.at(varName);
+				std::string bfType = scope.varBFTypeNames.at(varName);
+				bool isMap = bfType.substr(0, 4) == "map<";
+				emitRefDecrement(alloca, isMap);
+			}
+		}
 		builder->CreateRetVoid();
 	}
 }
@@ -746,6 +1575,20 @@ llvm::Value* CodeGen::generateExpression(const Expression& expr) {
 		builder->CreateStore(rhs, ptr);
 		return rhs;
 	}
+	if (auto* e = dynamic_cast<const IndexExpr*>(&expr)) {
+		return generateIndex(*e);
+	}
+	if (auto* e = dynamic_cast<const MemberAccessExpr*>(&expr)) {
+		return generateMemberAccess(*e);
+	}
+	if (dynamic_cast<const ThisExpr*>(&expr)) {
+		// Load the this pointer.
+		llvm::Type* thisType = lookupVarType("this");
+		return builder->CreateLoad(thisType, lookupVariable("this"), "this.ptr");
+	}
+	if (auto* e = dynamic_cast<const InterpolatedStringExpr*>(&expr)) {
+		return generateInterpolatedString(*e);
+	}
 	throw CodeGenError("Unsupported expression type");
 }
 
@@ -757,6 +1600,140 @@ llvm::Value* CodeGen::generateIdentifier(const IdentifierExpr& expr) {
 	auto alloca = lookupVariable(expr.name);
 	auto type = lookupVarType(expr.name);
 	return builder->CreateLoad(type, alloca, expr.name);
+}
+
+// ==========================
+// Index expression (array[i])
+// ==========================
+
+llvm::Value* CodeGen::generateIndex(const IndexExpr& expr) {
+	if (auto* ident = dynamic_cast<const IdentifierExpr*>(expr.object.get())) {
+		std::string bfType = lookupVarBFTypeName(ident->name);
+
+		// Array index
+		if (bfType.substr(0, 6) == "array<") {
+			std::string elemTypeName = bfType.substr(6, bfType.size() - 7);
+			TypeNode tn(elemTypeName);
+			llvm::Type* elemType = getLLVMType(tn);
+			auto* arrAlloca = lookupVariable(ident->name);
+			auto* arrType = getOrCreateArrayType(elemType);
+			auto* ptrType = llvm::PointerType::getUnqual(*context);
+
+			llvm::Value* data = builder->CreateLoad(ptrType,
+				builder->CreateStructGEP(arrType, arrAlloca, 0), "data");
+			llvm::Value* idx = generateExpression(*expr.index);
+			llvm::Value* elemPtr = builder->CreateGEP(elemType, data, idx, "elem.ptr");
+			return builder->CreateLoad(elemType, elemPtr, "elem");
+		}
+
+		// Map index
+		if (bfType.substr(0, 4) == "map<") {
+			auto commaPos = bfType.find(',', 4);
+			std::string keyTypeName = bfType.substr(4, commaPos - 4);
+			std::string valTypeName = bfType.substr(commaPos + 1, bfType.size() - commaPos - 2);
+
+			TypeNode keyTN(keyTypeName);
+			TypeNode valTN(valTypeName);
+			llvm::Type* keyType = getLLVMType(keyTN);
+			llvm::Type* valType = getLLVMType(valTN);
+
+			auto* mapAlloca = lookupVariable(ident->name);
+			llvm::Value* key = generateExpression(*expr.index);
+			return generateMapGet(mapAlloca, keyType, valType, key);
+		}
+	}
+	throw CodeGenError("Unsupported index expression");
+}
+
+// ==========================
+// Member access (obj.field)
+// ==========================
+
+llvm::Value* CodeGen::generateMemberAccess(const MemberAccessExpr& expr) {
+	auto [basePtr, structName] = resolveStructBase(*expr.object);
+
+	auto structIt = structRegistry.find(structName);
+	if (structIt != structRegistry.end()) {
+		auto& info = structIt->second;
+		auto fieldIt = info.fieldIndices.find(expr.member);
+		if (fieldIt != info.fieldIndices.end()) {
+			size_t idx = fieldIt->second;
+			auto* fieldPtr = builder->CreateStructGEP(info.llvmType, basePtr, idx, expr.member + ".ptr");
+			return builder->CreateLoad(info.fieldLLVMTypes[idx], fieldPtr, expr.member);
+		}
+		throw CodeGenError("Unknown field: " + expr.member + " on struct " + structName);
+	}
+	throw CodeGenError("Member access on non-struct type: " + structName);
+}
+
+// ==========================
+// Interpolated string generation
+// ==========================
+
+llvm::Value* CodeGen::generateInterpolatedString(const InterpolatedStringExpr& expr) {
+	// Build printf-style format string and collect argument values.
+	std::string formatStr;
+	std::vector<llvm::Value*> args;
+	std::vector<bool> isBoolArg;
+
+	for (size_t i = 0; i < expr.expressions.size(); i++) {
+		// Escape % in fragment for printf.
+		for (char c : expr.fragments[i]) {
+			if (c == '%') formatStr += "%%";
+			else formatStr += c;
+		}
+
+		llvm::Value* val = generateExpression(*expr.expressions[i]);
+
+		if (val->getType()->isIntegerTy(1)) {
+			// Bool: convert to string.
+			llvm::Value* trueStr = builder->CreateGlobalStringPtr("true", "true.str");
+			llvm::Value* falseStr = builder->CreateGlobalStringPtr("false", "false.str");
+			val = builder->CreateSelect(val, trueStr, falseStr, "boolstr");
+			formatStr += "%s";
+		} else if (isStringType(val->getType())) {
+			formatStr += "%s";
+		} else if (isFloatType(val->getType())) {
+			formatStr += "%g";
+		} else if (val->getType()->isIntegerTy(8)) {
+			formatStr += "%c";
+		} else {
+			formatStr += "%ld";
+		}
+		args.push_back(val);
+	}
+
+	// Add the final fragment.
+	for (char c : expr.fragments.back()) {
+		if (c == '%') formatStr += "%%";
+		else formatStr += c;
+	}
+
+	// Use snprintf to build the string: first get length, then allocate and fill.
+	llvm::Value* fmtStr = builder->CreateGlobalStringPtr(formatStr, "interp.fmt");
+	auto* i8Ptr = llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(*context));
+	auto* i64 = llvm::Type::getInt64Ty(*context);
+
+	// snprintf(NULL, 0, fmt, ...) to get required length.
+	std::vector<llvm::Value*> sizeArgs = {
+		llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8Ptr)),
+		llvm::ConstantInt::get(i64, 0),
+		fmtStr
+	};
+	sizeArgs.insert(sizeArgs.end(), args.begin(), args.end());
+	llvm::Value* len = builder->CreateCall(snprintfFunc, sizeArgs, "interp.len");
+
+	// Allocate buffer: malloc(len + 1)
+	llvm::Value* len64 = builder->CreateSExt(len, i64, "len64");
+	llvm::Value* bufSize = builder->CreateAdd(len64, llvm::ConstantInt::get(i64, 1), "bufsize");
+	llvm::Value* buf = builder->CreateCall(mallocFunc, {bufSize}, "interp.buf");
+
+	// Fill buffer: snprintf(buf, bufSize, fmt, ...)
+	std::vector<llvm::Value*> fillArgs = {buf, bufSize, fmtStr};
+	fillArgs.insert(fillArgs.end(), args.begin(), args.end());
+	builder->CreateCall(snprintfFunc, fillArgs);
+
+	return buf;
 }
 
 // ==========================
@@ -839,7 +1816,6 @@ llvm::Value* CodeGen::generateBinary(const BinaryExpr& expr) {
 
 	// Logical operators.
 	if (expr.op == "&&") {
-		// Convert both to i1 if needed.
 		if (!lhs->getType()->isIntegerTy(1)) {
 			lhs = builder->CreateICmpNE(lhs, llvm::Constant::getNullValue(lhs->getType()), "tobool");
 		}
@@ -933,6 +1909,97 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 		return generatePrintCall(expr.arguments);
 	}
 
+	// Check for constructor call: StructName(args...)
+	if (callee) {
+		auto structIt = structRegistry.find(callee->name);
+		if (structIt != structRegistry.end() && structIt->second.hasConstructor) {
+			auto& info = structIt->second;
+			auto* fn = builder->GetInsertBlock()->getParent();
+			auto alloca = createEntryBlockAlloca(fn, "ctor.tmp", info.llvmType);
+			// Zero-init before calling constructor.
+			builder->CreateStore(llvm::Constant::getNullValue(info.llvmType), alloca);
+			// Call StructName.constructor(alloca, args...)
+			llvm::Function* ctor = module->getFunction(callee->name + ".constructor");
+			if (!ctor) throw CodeGenError("Constructor not found for " + callee->name);
+			std::vector<llvm::Value*> args = {alloca};
+			for (const auto& arg : expr.arguments) {
+				args.push_back(generateExpression(*arg));
+			}
+			builder->CreateCall(ctor, args);
+			// Return the struct by value (load from alloca).
+			return builder->CreateLoad(info.llvmType, alloca, "ctor.result");
+		}
+	}
+
+	// Check for method call: obj.method() or obj.push()/obj.length()
+	if (auto* memberAccess = dynamic_cast<const MemberAccessExpr*>(expr.callee.get())) {
+		std::string bfType;
+		llvm::Value* objPtr = nullptr;
+
+		if (auto* ident = dynamic_cast<const IdentifierExpr*>(memberAccess->object.get())) {
+			bfType = lookupVarBFTypeName(ident->name);
+
+			// Array built-ins
+			if (bfType.substr(0, 6) == "array<") {
+				std::string elemTypeName = bfType.substr(6, bfType.size() - 7);
+				TypeNode tn(elemTypeName);
+				llvm::Type* elemType = getLLVMType(tn);
+				auto* arrAlloca = lookupVariable(ident->name);
+
+				if (memberAccess->member == "length") {
+					auto* arrType = getOrCreateArrayType(elemType);
+					auto* lenPtr = builder->CreateStructGEP(arrType, arrAlloca, 1, "len.ptr");
+					return builder->CreateLoad(llvm::Type::getInt64Ty(*context), lenPtr, "len");
+				}
+				if (memberAccess->member == "push") {
+					if (expr.arguments.size() != 1) {
+						throw CodeGenError("push() expects exactly 1 argument");
+					}
+					llvm::Value* val = generateExpression(*expr.arguments[0]);
+					generateArrayPush(arrAlloca, elemType, val);
+					return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 0);
+				}
+				throw CodeGenError("Unknown array method: " + memberAccess->member);
+			}
+
+			// Struct method calls
+			llvm::Type* varType = lookupVarType(ident->name);
+			if (varType->isStructTy()) {
+				objPtr = lookupVariable(ident->name);  // alloca IS the struct pointer
+			} else {
+				objPtr = builder->CreateLoad(varType, lookupVariable(ident->name), ident->name + ".ptr");
+			}
+		} else if (dynamic_cast<const ThisExpr*>(memberAccess->object.get())) {
+			bfType = lookupVarBFTypeName("this");
+			llvm::Type* thisType = lookupVarType("this");
+			objPtr = builder->CreateLoad(thisType, lookupVariable("this"), "this.ptr");
+		}
+
+		// Look up the method in the struct registry.
+		auto structIt = structRegistry.find(bfType);
+		if (structIt != structRegistry.end()) {
+			auto& info = structIt->second;
+			auto methodIt = info.methods.find(memberAccess->member);
+			if (methodIt != info.methods.end()) {
+				llvm::Function* method = module->getFunction(methodIt->second);
+				if (!method) throw CodeGenError("Undefined method: " + methodIt->second);
+
+				std::vector<llvm::Value*> args = {objPtr};
+				for (const auto& arg : expr.arguments) {
+					args.push_back(generateExpression(*arg));
+				}
+
+				if (method->getReturnType()->isVoidTy()) {
+					builder->CreateCall(method, args);
+					return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 0);
+				}
+				return builder->CreateCall(method, args, "methodcall");
+			}
+			throw CodeGenError("Unknown method: " + memberAccess->member + " on " + bfType);
+		}
+		throw CodeGenError("Method call on non-struct type: " + bfType);
+	}
+
 	// Look up the function in the module.
 	std::string fnName;
 	if (callee) {
@@ -968,6 +2035,74 @@ llvm::Value* CodeGen::generatePrintCall(const std::vector<ExprPtr>& args) {
 	}
 
 	for (const auto& arg : args) {
+		// Check for print(array_var) — detect by BF type name
+		if (auto* ident = dynamic_cast<const IdentifierExpr*>(arg.get())) {
+			std::string bfType = lookupVarBFTypeName(ident->name);
+			if (bfType.substr(0, 6) == "array<") {
+				std::string elemTypeName = bfType.substr(6, bfType.size() - 7);
+				TypeNode tn(elemTypeName);
+				llvm::Type* elemType = getLLVMType(tn);
+				auto* arrAlloca = lookupVariable(ident->name);
+				generatePrintArray(arrAlloca, elemType);
+				continue;
+			}
+			if (bfType.substr(0, 4) == "map<") {
+				auto commaPos = bfType.find(',', 4);
+				std::string keyTypeName = bfType.substr(4, commaPos - 4);
+				std::string valTypeName = bfType.substr(commaPos + 1, bfType.size() - commaPos - 2);
+				TypeNode keyTN(keyTypeName);
+				TypeNode valTN(valTypeName);
+				llvm::Type* keyType = getLLVMType(keyTN);
+				llvm::Type* valType = getLLVMType(valTN);
+				auto* mapAlloca = lookupVariable(ident->name);
+				generatePrintMap(mapAlloca, keyType, valType);
+				continue;
+			}
+		}
+
+		// Special case: InterpolatedStringExpr inside print → use printf directly
+		if (auto* interpStr = dynamic_cast<const InterpolatedStringExpr*>(arg.get())) {
+			// Build format string with \n at the end.
+			std::string formatStr;
+			std::vector<llvm::Value*> printArgs;
+
+			for (size_t i = 0; i < interpStr->expressions.size(); i++) {
+				for (char c : interpStr->fragments[i]) {
+					if (c == '%') formatStr += "%%";
+					else formatStr += c;
+				}
+
+				llvm::Value* val = generateExpression(*interpStr->expressions[i]);
+
+				if (val->getType()->isIntegerTy(1)) {
+					llvm::Value* trueStr = builder->CreateGlobalStringPtr("true", "true.str");
+					llvm::Value* falseStr = builder->CreateGlobalStringPtr("false", "false.str");
+					val = builder->CreateSelect(val, trueStr, falseStr, "boolstr");
+					formatStr += "%s";
+				} else if (isStringType(val->getType())) {
+					formatStr += "%s";
+				} else if (isFloatType(val->getType())) {
+					formatStr += "%g";
+				} else if (val->getType()->isIntegerTy(8)) {
+					formatStr += "%c";
+				} else {
+					formatStr += "%ld";
+				}
+				printArgs.push_back(val);
+			}
+			for (char c : interpStr->fragments.back()) {
+				if (c == '%') formatStr += "%%";
+				else formatStr += c;
+			}
+			formatStr += "\n";
+
+			llvm::Value* fmtVal = builder->CreateGlobalStringPtr(formatStr, "interp.fmt");
+			std::vector<llvm::Value*> allArgs = {fmtVal};
+			allArgs.insert(allArgs.end(), printArgs.begin(), printArgs.end());
+			builder->CreateCall(printfFunc, allArgs, "printf");
+			continue;
+		}
+
 		llvm::Value* val = generateExpression(*arg);
 		llvm::Value* fmt = nullptr;
 
@@ -998,11 +2133,156 @@ llvm::Value* CodeGen::generatePrintCall(const std::vector<ExprPtr>& args) {
 	return llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0);
 }
 
-// Stub implementations for features not yet fully supported.
-llvm::Value* CodeGen::generateIndex(const IndexExpr& expr) {
-	throw CodeGenError("Index expressions not yet supported in codegen");
+// ==========================
+// Print array: [elem, elem, ...]
+// ==========================
+
+void CodeGen::generatePrintArray(llvm::AllocaInst* arrAlloca, llvm::Type* elemType) {
+	auto* fn = builder->GetInsertBlock()->getParent();
+	auto* arrType = getOrCreateArrayType(elemType);
+	auto* i64 = llvm::Type::getInt64Ty(*context);
+	auto* ptrType = llvm::PointerType::getUnqual(*context);
+
+	llvm::Value* data = builder->CreateLoad(ptrType,
+		builder->CreateStructGEP(arrType, arrAlloca, 0), "data");
+	llvm::Value* len = builder->CreateLoad(i64,
+		builder->CreateStructGEP(arrType, arrAlloca, 1), "len");
+
+	// Print "["
+	llvm::Value* openFmt = builder->CreateGlobalStringPtr("[", "arr.open");
+	builder->CreateCall(printfFunc, {openFmt});
+
+	// Loop: print each element
+	auto* condBB = llvm::BasicBlock::Create(*context, "print.cond", fn);
+	auto* bodyBB = llvm::BasicBlock::Create(*context, "print.body", fn);
+	auto* doneBB = llvm::BasicBlock::Create(*context, "print.done", fn);
+
+	builder->CreateBr(condBB);
+
+	builder->SetInsertPoint(condBB);
+	auto* iPhi = builder->CreatePHI(i64, 2, "i");
+	iPhi->addIncoming(llvm::ConstantInt::get(i64, 0), condBB->getSinglePredecessor());
+	llvm::Value* inBounds = builder->CreateICmpSLT(iPhi, len, "inbounds");
+	builder->CreateCondBr(inBounds, bodyBB, doneBB);
+
+	builder->SetInsertPoint(bodyBB);
+
+	// Print separator if not first element
+	auto* sepBB = llvm::BasicBlock::Create(*context, "print.sep", fn);
+	auto* elemBB = llvm::BasicBlock::Create(*context, "print.elem", fn);
+	llvm::Value* isFirst = builder->CreateICmpEQ(iPhi, llvm::ConstantInt::get(i64, 0), "isfirst");
+	builder->CreateCondBr(isFirst, elemBB, sepBB);
+
+	builder->SetInsertPoint(sepBB);
+	llvm::Value* sepFmt = builder->CreateGlobalStringPtr(", ", "sep");
+	builder->CreateCall(printfFunc, {sepFmt});
+	builder->CreateBr(elemBB);
+
+	builder->SetInsertPoint(elemBB);
+	llvm::Value* elemPtr = builder->CreateGEP(elemType, data, iPhi, "elem.ptr");
+	llvm::Value* elem = builder->CreateLoad(elemType, elemPtr, "elem");
+
+	// Print the element based on type.
+	if (isStringType(elemType)) {
+		llvm::Value* fmt = builder->CreateGlobalStringPtr("%s", "fmt");
+		builder->CreateCall(printfFunc, {fmt, elem});
+	} else if (isFloatType(elemType)) {
+		llvm::Value* fmt = builder->CreateGlobalStringPtr("%g", "fmt");
+		builder->CreateCall(printfFunc, {fmt, elem});
+	} else {
+		llvm::Value* fmt = builder->CreateGlobalStringPtr("%ld", "fmt");
+		builder->CreateCall(printfFunc, {fmt, elem});
+	}
+
+	llvm::Value* iNext = builder->CreateAdd(iPhi, llvm::ConstantInt::get(i64, 1), "i.next");
+	iPhi->addIncoming(iNext, builder->GetInsertBlock());
+	builder->CreateBr(condBB);
+
+	builder->SetInsertPoint(doneBB);
+	llvm::Value* closeFmt = builder->CreateGlobalStringPtr("]\n", "arr.close");
+	builder->CreateCall(printfFunc, {closeFmt});
 }
 
-llvm::Value* CodeGen::generateMemberAccess(const MemberAccessExpr& expr) {
-	throw CodeGenError("Member access not yet supported in codegen");
+// ==========================
+// Print map: {key: val, key: val, ...}
+// ==========================
+
+void CodeGen::generatePrintMap(llvm::AllocaInst* mapAlloca, llvm::Type* keyType, llvm::Type* valType) {
+	auto* fn = builder->GetInsertBlock()->getParent();
+	auto* mapType = getOrCreateMapType(keyType, valType);
+	auto* i64 = llvm::Type::getInt64Ty(*context);
+	auto* ptrType = llvm::PointerType::getUnqual(*context);
+
+	llvm::Value* keys = builder->CreateLoad(ptrType,
+		builder->CreateStructGEP(mapType, mapAlloca, 0), "keys");
+	llvm::Value* vals = builder->CreateLoad(ptrType,
+		builder->CreateStructGEP(mapType, mapAlloca, 1), "vals");
+	llvm::Value* len = builder->CreateLoad(i64,
+		builder->CreateStructGEP(mapType, mapAlloca, 2), "len");
+
+	// Print "{"
+	llvm::Value* openFmt = builder->CreateGlobalStringPtr("{", "map.open");
+	builder->CreateCall(printfFunc, {openFmt});
+
+	auto* condBB = llvm::BasicBlock::Create(*context, "mprint.cond", fn);
+	auto* bodyBB = llvm::BasicBlock::Create(*context, "mprint.body", fn);
+	auto* doneBB = llvm::BasicBlock::Create(*context, "mprint.done", fn);
+
+	builder->CreateBr(condBB);
+
+	builder->SetInsertPoint(condBB);
+	auto* iPhi = builder->CreatePHI(i64, 2, "i");
+	iPhi->addIncoming(llvm::ConstantInt::get(i64, 0), condBB->getSinglePredecessor());
+	llvm::Value* inBounds = builder->CreateICmpSLT(iPhi, len, "inbounds");
+	builder->CreateCondBr(inBounds, bodyBB, doneBB);
+
+	builder->SetInsertPoint(bodyBB);
+
+	auto* sepBB = llvm::BasicBlock::Create(*context, "mprint.sep", fn);
+	auto* kvBB = llvm::BasicBlock::Create(*context, "mprint.kv", fn);
+	llvm::Value* isFirst = builder->CreateICmpEQ(iPhi, llvm::ConstantInt::get(i64, 0), "isfirst");
+	builder->CreateCondBr(isFirst, kvBB, sepBB);
+
+	builder->SetInsertPoint(sepBB);
+	llvm::Value* sepFmt = builder->CreateGlobalStringPtr(", ", "sep");
+	builder->CreateCall(printfFunc, {sepFmt});
+	builder->CreateBr(kvBB);
+
+	builder->SetInsertPoint(kvBB);
+
+	// Print key
+	llvm::Value* keyPtr = builder->CreateGEP(keyType, keys, iPhi, "key.ptr");
+	llvm::Value* keyVal = builder->CreateLoad(keyType, keyPtr, "key");
+	if (isStringType(keyType)) {
+		llvm::Value* fmt = builder->CreateGlobalStringPtr("%s: ", "kfmt");
+		builder->CreateCall(printfFunc, {fmt, keyVal});
+	} else if (isFloatType(keyType)) {
+		llvm::Value* fmt = builder->CreateGlobalStringPtr("%g: ", "kfmt");
+		builder->CreateCall(printfFunc, {fmt, keyVal});
+	} else {
+		llvm::Value* fmt = builder->CreateGlobalStringPtr("%ld: ", "kfmt");
+		builder->CreateCall(printfFunc, {fmt, keyVal});
+	}
+
+	// Print value
+	llvm::Value* valPtr = builder->CreateGEP(valType, vals, iPhi, "val.ptr");
+	llvm::Value* valVal = builder->CreateLoad(valType, valPtr, "val");
+	if (isStringType(valType)) {
+		llvm::Value* fmt = builder->CreateGlobalStringPtr("%s", "vfmt");
+		builder->CreateCall(printfFunc, {fmt, valVal});
+	} else if (isFloatType(valType)) {
+		llvm::Value* fmt = builder->CreateGlobalStringPtr("%g", "vfmt");
+		builder->CreateCall(printfFunc, {fmt, valVal});
+	} else {
+		llvm::Value* fmt = builder->CreateGlobalStringPtr("%ld", "vfmt");
+		builder->CreateCall(printfFunc, {fmt, valVal});
+	}
+
+	llvm::Value* iNext = builder->CreateAdd(iPhi, llvm::ConstantInt::get(i64, 1), "i.next");
+	iPhi->addIncoming(iNext, builder->GetInsertBlock());
+	builder->CreateBr(condBB);
+
+	builder->SetInsertPoint(doneBB);
+	llvm::Value* closeFmt = builder->CreateGlobalStringPtr("}\n", "map.close");
+	builder->CreateCall(printfFunc, {closeFmt});
 }

@@ -541,3 +541,362 @@ TEST(CodeGenPrograms, OperatorsProgram) {
 	assertIRContains(ir, "define i64 @main()");
 	assertIRContains(ir, "ret i64 0");
 }
+
+// ============================================================
+// Struct codegen
+// ============================================================
+
+TEST(CodeGenStructs, StructTypeRegistered) {
+	std::string ir = compileToIR(R"(
+		struct Point { x: int; y: int; }
+		main(): int {
+			p: Point = { x: 1, y: 2 };
+			return 0;
+		}
+	)");
+	assertIRContains(ir, "%Point = type { i64, i64 }");
+}
+
+TEST(CodeGenStructs, StructInit) {
+	std::string ir = compileToIR(R"(
+		struct Point { x: int; y: int; }
+		main(): int {
+			p: Point = { x: 10, y: 20 };
+			return 0;
+		}
+	)");
+	assertIRContains(ir, "%Point = type { i64, i64 }");
+	assertIRContains(ir, "alloca %Point");
+	assertIRContains(ir, "getelementptr inbounds %Point");
+}
+
+TEST(CodeGenStructs, StructMemberAccess) {
+	std::string ir = compileToIR(R"(
+		struct Point { x: int; y: int; }
+		main(): int {
+			p: Point = { x: 5, y: 10 };
+			return p.x;
+		}
+	)");
+	assertIRContains(ir, "getelementptr inbounds %Point");
+}
+
+TEST(CodeGenStructs, StructMethod) {
+	std::string ir = compileToIR(R"(
+		struct Greeter {
+			msg: string;
+			greet(): void {
+				print(this.msg);
+			}
+		}
+		main(): int { return 0; }
+	)");
+	assertIRContains(ir, "define void @Greeter.greet(ptr %this)");
+}
+
+TEST(CodeGenStructs, StructMethodCall) {
+	std::string ir = compileToIR(R"(
+		struct Greeter {
+			msg: string;
+			greet(): void {
+				print(this.msg);
+			}
+		}
+		main(): int {
+			g: Greeter = { msg: "hello" };
+			g.greet();
+			return 0;
+		}
+	)");
+	assertIRContains(ir, "call void @Greeter.greet(ptr");
+}
+
+TEST(CodeGenStructs, ConstructorCall) {
+	std::string ir = compileToIR(R"(
+		struct Point {
+			x: int;
+			y: int;
+			constructor(x: int, y: int) {
+				this.x = x;
+				this.y = y;
+			}
+		}
+		main(): int {
+			p: Point = Point(1, 2);
+			return p.x;
+		}
+	)");
+	assertIRContains(ir, "define void @Point.constructor(ptr %this, i64 %x, i64 %y)");
+	assertIRContains(ir, "call void @Point.constructor(ptr");
+}
+
+TEST(CodeGenStructs, ConstructorWithWalrus) {
+	std::string ir = compileToIR(R"(
+		struct Vec2 {
+			x: int;
+			y: int;
+			constructor(x: int, y: int) {
+				this.x = x;
+				this.y = y;
+			}
+		}
+		main(): int {
+			v := Vec2(3, 4);
+			return v.x;
+		}
+	)");
+	assertIRContains(ir, "call void @Vec2.constructor(ptr");
+}
+
+// ============================================================
+// Array codegen
+// ============================================================
+
+TEST(CodeGenArrays, ArrayLiteral) {
+	std::string ir = compileToIR(R"(
+		main(): int {
+			nums: array<int> = [1, 2, 3];
+			return 0;
+		}
+	)");
+	assertIRContains(ir, "call ptr @malloc");
+	assertIRContains(ir, "store i64 3");  // length = 3
+}
+
+TEST(CodeGenArrays, EmptyArray) {
+	std::string ir = compileToIR(R"(
+		main(): int {
+			nums: array<int>;
+			return 0;
+		}
+	)");
+	// length 0, capacity 8
+	assertIRContains(ir, "store i64 0");
+	assertIRContains(ir, "store i64 8");
+}
+
+TEST(CodeGenArrays, ArrayPush) {
+	std::string ir = compileToIR(R"(
+		main(): int {
+			nums: array<int>;
+			nums.push(42);
+			return 0;
+		}
+	)");
+	// push involves storing the element and updating length
+	assertIRContains(ir, "store i64 42");
+}
+
+TEST(CodeGenArrays, ArrayLength) {
+	std::string ir = compileToIR(R"(
+		main(): int {
+			nums: array<int> = [10, 20];
+			return nums.length();
+		}
+	)");
+	// length is loaded from index 1 of the array struct
+	assertIRContains(ir, "getelementptr inbounds");
+}
+
+TEST(CodeGenArrays, ArrayIndex) {
+	std::string ir = compileToIR(R"(
+		main(): int {
+			nums: array<int> = [10, 20, 30];
+			return nums[1];
+		}
+	)");
+	assertIRContains(ir, "getelementptr inbounds");
+}
+
+// ============================================================
+// Map codegen
+// ============================================================
+
+TEST(CodeGenMaps, EmptyMap) {
+	std::string ir = compileToIR(R"(
+		main(): int {
+			codes: map<int, string>;
+			return 0;
+		}
+	)");
+	assertIRContains(ir, "call ptr @malloc");
+	assertIRContains(ir, "store i64 0");  // length = 0
+}
+
+TEST(CodeGenMaps, MapSet) {
+	std::string ir = compileToIR(R"(
+		main(): int {
+			codes: map<int, string>;
+			codes[200] = "Ok";
+			return 0;
+		}
+	)");
+	// Map set generates a search loop
+	assertIRContains(ir, "icmp slt");
+}
+
+TEST(CodeGenMaps, MapGet) {
+	std::string ir = compileToIR(R"(
+		main(): int {
+			ages: map<string, int>;
+			ages["Alice"] = 30;
+			x := ages["Alice"];
+			return 0;
+		}
+	)");
+	assertIRContains(ir, "call ptr @malloc");
+}
+
+// ============================================================
+// Interpolated string codegen
+// ============================================================
+
+TEST(CodeGenInterpolation, PrintInterpolation) {
+	std::string ir = compileToIR(R"(
+		main(): int {
+			name: string = "World";
+			print("Hello {name}!");
+			return 0;
+		}
+	)");
+	// Optimized path: direct printf for print(interpolated)
+	assertIRContains(ir, "call i32 (ptr, ...) @printf");
+}
+
+TEST(CodeGenInterpolation, InterpolatedStringVar) {
+	std::string ir = compileToIR(R"(
+		main(): int {
+			name: string = "World";
+			msg: string = "Hello {name}!";
+			return 0;
+		}
+	)");
+	// General path: snprintf for measuring + malloc + snprintf
+	assertIRContains(ir, "call i32 (ptr, i64, ptr, ...) @snprintf");
+	assertIRContains(ir, "call ptr @malloc");
+}
+
+// ============================================================
+// Struct composition codegen
+// ============================================================
+
+TEST(CodeGenComposition, NestedStructType) {
+	std::string ir = compileToIR(R"(
+		struct Point { x: int; y: int; }
+		struct Circle { center: Point; radius: float; }
+		main(): int {
+			c: Circle = { center: { x: 1, y: 2 }, radius: 3.0 };
+			return 0;
+		}
+	)");
+	assertIRContains(ir, "%Circle = type { %Point, double }");
+	assertIRContains(ir, "%Point = type { i64, i64 }");
+}
+
+TEST(CodeGenComposition, NestedStructInit) {
+	std::string ir = compileToIR(R"(
+		struct Point { x: int; y: int; }
+		struct Circle { center: Point; radius: float; }
+		main(): int {
+			c: Circle = { center: { x: 10, y: 20 }, radius: 5.5 };
+			return 0;
+		}
+	)");
+	// Nested GEP into the embedded Point struct.
+	assertIRContains(ir, "getelementptr inbounds %Circle");
+	assertIRContains(ir, "getelementptr inbounds %Point");
+	assertIRContains(ir, "store i64 10");
+	assertIRContains(ir, "store i64 20");
+	assertIRContains(ir, "store double 5.5");
+}
+
+TEST(CodeGenComposition, ChainedMemberAccess) {
+	std::string ir = compileToIR(R"(
+		struct Point { x: int; y: int; }
+		struct Circle { center: Point; radius: float; }
+		main(): int {
+			c: Circle = { center: { x: 10, y: 20 }, radius: 5.5 };
+			val := c.center.x;
+			return 0;
+		}
+	)");
+	// Chained access: first GEP into Circle for center, then GEP into Point for x.
+	assertIRContains(ir, "center.ptr");
+	assertIRContains(ir, "x.ptr");
+	assertIRContains(ir, "load i64");
+}
+
+// ============================================================
+// Reference counting codegen
+// ============================================================
+
+TEST(CodeGenRefCount, ArrayHasRefCountField) {
+	std::string ir = compileToIR(R"(
+		main(): int {
+			nums: array<int> = [1, 2, 3];
+			return 0;
+		}
+	)");
+	// Array struct is now { ptr, i64, i64, ptr } with rc field.
+	assertIRContains(ir, "{ ptr, i64, i64, ptr }");
+	// RC allocation: malloc(8) for the refcount.
+	assertIRContains(ir, "arr.rc");
+}
+
+TEST(CodeGenRefCount, MapHasRefCountField) {
+	std::string ir = compileToIR(R"(
+		main(): int {
+			m: map<int, string>;
+			return 0;
+		}
+	)");
+	// Map struct is now { ptr, ptr, i64, i64, ptr } with rc field.
+	assertIRContains(ir, "{ ptr, ptr, i64, i64, ptr }");
+	assertIRContains(ir, "map.rc");
+}
+
+TEST(CodeGenRefCount, ArrayCleanupOnReturn) {
+	std::string ir = compileToIR(R"(
+		main(): int {
+			nums: array<int> = [1, 2, 3];
+			return 0;
+		}
+	)");
+	// Should emit rc decrement and conditional free before return.
+	assertIRContains(ir, "rc.dec");
+	assertIRContains(ir, "rc.iszero");
+	assertIRContains(ir, "rc.free");
+	assertIRContains(ir, "call void @free");
+}
+
+TEST(CodeGenRefCount, MapCleanupOnReturn) {
+	std::string ir = compileToIR(R"(
+		main(): int {
+			m: map<string, int>;
+			return 0;
+		}
+	)");
+	// Map cleanup frees both keys and values buffers.
+	assertIRContains(ir, "rc.dec");
+	assertIRContains(ir, "call void @free");
+}
+
+TEST(CodeGenRefCount, MultipleContainersCleanup) {
+	std::string ir = compileToIR(R"(
+		main(): int {
+			a: array<int> = [1, 2];
+			b: array<int>;
+			m: map<int, int>;
+			return 0;
+		}
+	)");
+	// Each container should have its own rc.free block.
+	// Count occurrence of rc.free labels (at least 3).
+	size_t count = 0;
+	size_t pos = 0;
+	while ((pos = ir.find("rc.free", pos)) != std::string::npos) {
+		count++;
+		pos += 7;
+	}
+	ASSERT_GE(count, 3) << "Expected at least 3 rc.free references for 3 containers";
+}
