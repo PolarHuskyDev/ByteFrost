@@ -114,6 +114,7 @@ main(): int {
 	x: int = 0;
 	while (x <= 10) {
 		if (x == 2) {
+			x++;
 			continue; // skip 2 but move forward to 3
 		}
 
@@ -122,6 +123,7 @@ main(): int {
 		}
 
 		print(x);
+		x++;
 	}
 
 	return 0;
@@ -289,8 +291,6 @@ struct Node {
 ```
 `Box<T>` would integrate with the existing refcount infrastructure — `malloc` on creation, decrement/free on scope exit. Note: `Box` fields would allow cycles, requiring either weak references (`Weak<T>`) or user discipline.
 
-
-Right now I would like an overall evaluation from you in terms of clarity, readability and get an overall score of the language. I would also like to get some suggestions on what can be changed, added or improved
 
 ## Operators
 ### Arithmetic operators (The core)
