@@ -9,8 +9,8 @@ struct Circle {
 }
 
 main(): int {
-	c: Circle = Circle {
-		center: Point {
+	c: Circle = {
+		center: {
 			x: 10,
 			y: 20
 		},

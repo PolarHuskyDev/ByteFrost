@@ -632,28 +632,6 @@ ExprPtr Parser::parsePostfix() {
 			std::string op = current().value;
 			advance();
 			expr = std::make_unique<UnaryExpr>(op, std::move(expr), false);
-		} else if (check(TokenType::LEFT_BRACE_TOKEN)) {
-			// Named struct init: TypeName { field: value, ... }
-			auto* ident = dynamic_cast<IdentifierExpr*>(expr.get());
-			if (!ident) break;
-			std::string structName = ident->name;
-			int sLine = expr->line;
-			int sCol = expr->column;
-			advance(); // consume '{'
-			std::vector<std::pair<std::string, ExprPtr>> fields;
-			if (!check(TokenType::RIGHT_BRACE_TOKEN)) {
-				do {
-					const Token& fname = expect(TokenType::IDENTIFIER_TOKEN, "Expected field name in struct literal");
-					expect(TokenType::COLON_TOKEN, "Expected ':' after field name");
-					auto value = parseExpression();
-					fields.push_back({fname.value, std::move(value)});
-				} while (match(TokenType::COMMA_TOKEN));
-			}
-			expect(TokenType::RIGHT_BRACE_TOKEN, "Expected '}' after struct literal");
-			auto initExpr = std::make_unique<StructInitExpr>(std::move(fields), structName);
-			initExpr->line = sLine;
-			initExpr->column = sCol;
-			expr = std::move(initExpr);
 		} else {
 			break;
 		}
