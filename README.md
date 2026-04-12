@@ -248,8 +248,46 @@ Reference counting gives deterministic deallocation with cheap sharing — a goo
 Reference cycles (A → B → A) cannot occur in ByteFrost because:
 - Structs are **value types** embedded inline — they cannot form pointer cycles.
 - Arrays and maps hold primitive values or struct copies, not references to other containers.
+- **Cyclic struct dependencies are rejected at compile time** — both direct (`Node` contains `Node`) and indirect (`A` contains `B` which contains `A`). The compiler performs a full dependency graph analysis before registering any struct types.
 
 This is a structural guarantee: no cycle collector is needed.
+
+### Cyclic struct limitation
+
+ByteFrost currently does not support recursive data structures like linked lists or trees directly. The compiler rejects both **direct** and **indirect** cycles:
+
+```bf
+// Direct: struct references itself
+struct Node {
+    value: int;
+    next: Node;  // ERROR
+}
+
+// Indirect: A → B → A
+struct A { b: B; }
+struct B { a: A; }  // ERROR
+```
+
+The compiler traces the full cycle path in the error message:
+```
+Codegen error: Cyclic struct dependency detected: Node -> Node.
+Structs are value types and cannot form cycles (infinite size).
+Future: use Box<T> for heap-allocated indirection.
+```
+```
+Codegen error: Cyclic struct dependency detected: A -> B -> A. ...
+```
+
+**Why?** Structs are value types stored inline on the stack. A `Node` containing another `Node` (directly or through a chain of intermediate structs) would require infinite storage. Every language shares this fundamental constraint — C uses pointers (`struct Node*`), Rust uses `Box<Node>`, Java/Python use reference semantics.
+
+**Future path — `Box<T>`:** A heap-allocated, reference-counted pointer type would enable recursive structures:
+```bf
+struct Node {
+    value: int;
+    next: Box<Node>;  // 8-byte pointer to heap-allocated Node
+}
+```
+`Box<T>` would integrate with the existing refcount infrastructure — `malloc` on creation, decrement/free on scope exit. Note: `Box` fields would allow cycles, requiring either weak references (`Weak<T>`) or user discipline.
 
 
 Right now I would like an overall evaluation from you in terms of clarity, readability and get an overall score of the language. I would also like to get some suggestions on what can be changed, added or improved

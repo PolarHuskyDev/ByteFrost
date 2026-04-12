@@ -900,3 +900,77 @@ TEST(CodeGenRefCount, MultipleContainersCleanup) {
 	}
 	ASSERT_GE(count, 3) << "Expected at least 3 rc.free references for 3 containers";
 }
+
+// ============================================================
+// Cyclic struct rejection
+// ============================================================
+
+TEST(CodeGenStructErrors, DirectSelfReferenceRejected) {
+	EXPECT_THROW({
+		compileToIR(R"(
+			struct Node {
+				value: int;
+				next: Node;
+			}
+			main(): int { return 0; }
+		)");
+	}, CodeGenError);
+}
+
+TEST(CodeGenStructErrors, DirectSelfReferenceErrorMessage) {
+	try {
+		compileToIR(R"(
+			struct Node {
+				value: int;
+				next: Node;
+			}
+			main(): int { return 0; }
+		)");
+		FAIL() << "Expected CodeGenError";
+	} catch (const CodeGenError& e) {
+		std::string msg = e.what();
+		EXPECT_NE(msg.find("Cyclic struct dependency"), std::string::npos);
+		EXPECT_NE(msg.find("Node -> Node"), std::string::npos);
+		EXPECT_NE(msg.find("Box<T>"), std::string::npos);
+	}
+}
+
+TEST(CodeGenStructErrors, IndirectCycleRejected) {
+	EXPECT_THROW({
+		compileToIR(R"(
+			struct A { b: B; }
+			struct B { a: A; }
+			main(): int { return 0; }
+		)");
+	}, CodeGenError);
+}
+
+TEST(CodeGenStructErrors, IndirectCycleErrorMessage) {
+	try {
+		compileToIR(R"(
+			struct A { b: B; }
+			struct B { a: A; }
+			main(): int { return 0; }
+		)");
+		FAIL() << "Expected CodeGenError";
+	} catch (const CodeGenError& e) {
+		std::string msg = e.what();
+		EXPECT_NE(msg.find("Cyclic struct dependency"), std::string::npos);
+		EXPECT_NE(msg.find("A -> B -> A"), std::string::npos);
+	}
+}
+
+TEST(CodeGenStructErrors, ThreeWayCycleRejected) {
+	try {
+		compileToIR(R"(
+			struct A { b: B; }
+			struct B { c: C; }
+			struct C { a: A; }
+			main(): int { return 0; }
+		)");
+		FAIL() << "Expected CodeGenError";
+	} catch (const CodeGenError& e) {
+		std::string msg = e.what();
+		EXPECT_NE(msg.find("A -> B -> C -> A"), std::string::npos);
+	}
+}

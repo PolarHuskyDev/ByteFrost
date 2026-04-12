@@ -3,6 +3,7 @@
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <set>
 #include <sstream>
 
 // ==========================
@@ -263,6 +264,56 @@ std::string CodeGen::getFormatSpecifier(llvm::Type* type) const {
 // ==========================
 
 void CodeGen::registerStructTypes(const Program& program) {
+	// Build a map of struct name -> field type names for cycle detection.
+	std::map<std::string, std::vector<std::pair<std::string, std::string>>> structFields;
+	for (const auto& sd : program.structs) {
+		auto& fields = structFields[sd->name];
+		for (const auto& member : sd->members) {
+			if (member.kind == StructMember::FIELD) {
+				fields.emplace_back(member.fieldName, member.fieldType->name);
+			}
+		}
+	}
+
+	// DFS cycle detection: detect direct (A→A) and indirect (A→B→A) cycles.
+	std::set<std::string> visited, inStack;
+	std::function<void(const std::string&, std::vector<std::string>&)> detectCycle =
+		[&](const std::string& name, std::vector<std::string>& path) {
+			if (inStack.count(name)) {
+				// Build cycle description: find where the cycle starts in path.
+				std::string cycle;
+				bool inCycle = false;
+				for (const auto& p : path) {
+					if (p == name) inCycle = true;
+					if (inCycle) cycle += p + " -> ";
+				}
+				cycle += name;
+				throw CodeGenError(
+					"Cyclic struct dependency detected: " + cycle +
+					". Structs are value types and cannot form cycles "
+					"(infinite size). Future: use Box<T> for heap-allocated indirection.");
+			}
+			if (visited.count(name)) return;
+			visited.insert(name);
+			inStack.insert(name);
+			path.push_back(name);
+			if (structFields.count(name)) {
+				for (const auto& [fieldName, fieldType] : structFields.at(name)) {
+					if (structFields.count(fieldType)) {
+						detectCycle(fieldType, path);
+					}
+				}
+			}
+			path.pop_back();
+			inStack.erase(name);
+		};
+
+	for (const auto& sd : program.structs) {
+		std::vector<std::string> path;
+		detectCycle(sd->name, path);
+	}
+
+	// All structs are acyclic — safe to register types.
 	for (const auto& sd : program.structs) {
 		StructInfo info;
 
