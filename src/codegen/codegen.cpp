@@ -1,7 +1,14 @@
 #include "codegen/codegen.h"
 
+#include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/MC/TargetRegistry.h>
+#include <llvm/Support/FileSystem.h>
+#include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Target/TargetMachine.h>
+#include <llvm/Target/TargetOptions.h>
+#include <llvm/TargetParser/Host.h>
 
 #include <set>
 #include <sstream>
@@ -17,10 +24,44 @@ CodeGen::CodeGen() {
 }
 
 // ==========================
+// Target initialization
+// ==========================
+
+void CodeGen::initializeTarget() {
+	llvm::InitializeAllTargetInfos();
+	llvm::InitializeAllTargets();
+	llvm::InitializeAllTargetMCs();
+	llvm::InitializeAllAsmParsers();
+	llvm::InitializeAllAsmPrinters();
+
+	auto triple = llvm::sys::getDefaultTargetTriple();
+	module->setTargetTriple(triple);
+
+	std::string error;
+	const auto* target = llvm::TargetRegistry::lookupTarget(triple, error);
+	if (!target) {
+		throw CodeGenError("Failed to lookup target: " + error);
+	}
+
+	targetMachine.reset(target->createTargetMachine(
+		triple,
+		"generic",
+		"",
+		llvm::TargetOptions{},
+		llvm::Reloc::PIC_));
+
+	if (!targetMachine) {
+		throw CodeGenError("Failed to create target machine for: " + triple);
+	}
+
+	module->setDataLayout(targetMachine->createDataLayout());
+}
+
+// ==========================
 // Public interface
 // ==========================
 
-std::string CodeGen::generate(const Program& program) {
+void CodeGen::buildIR(const Program& program) {
 	declareBuiltins();
 
 	// Register all struct types first (so they can be referenced).
@@ -40,12 +81,36 @@ std::string CodeGen::generate(const Program& program) {
 	if (llvm::verifyModule(*module, &verifyStream)) {
 		throw CodeGenError("Module verification failed: " + verifyErr);
 	}
+}
+
+std::string CodeGen::generate(const Program& program) {
+	buildIR(program);
 
 	// Print the IR to a string.
 	std::string irStr;
 	llvm::raw_string_ostream irStream(irStr);
 	module->print(irStream, nullptr);
 	return irStr;
+}
+
+void CodeGen::emitObjectFile(const Program& program, const std::string& outputPath) {
+	initializeTarget();
+	buildIR(program);
+
+	std::error_code ec;
+	llvm::raw_fd_ostream dest(outputPath, ec, llvm::sys::fs::OF_None);
+	if (ec) {
+		throw CodeGenError("Could not open output file: " + ec.message());
+	}
+
+	llvm::legacy::PassManager pass;
+	if (targetMachine->addPassesToEmitFile(pass, dest, nullptr,
+										   llvm::CodeGenFileType::ObjectFile)) {
+		throw CodeGenError("Target machine cannot emit object files");
+	}
+
+	pass.run(*module);
+	dest.flush();
 }
 
 // ==========================

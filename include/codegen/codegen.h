@@ -14,6 +14,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Target/TargetMachine.h"
 
 #include "parser/ast.h"
 
@@ -29,6 +30,9 @@ class CodeGen {
 	/// Generate LLVM IR for the entire program. Returns the IR as a string.
 	std::string generate(const Program& program);
 
+	/// Compile the program and write a native object file to disk.
+	void emitObjectFile(const Program& program, const std::string& outputPath);
+
 	/// Access the module (for unit testing).
 	llvm::Module& getModule() { return *module; }
 	llvm::LLVMContext& getContext() { return *context; }
@@ -37,6 +41,7 @@ class CodeGen {
 	std::unique_ptr<llvm::LLVMContext> context;
 	std::unique_ptr<llvm::Module> module;
 	std::unique_ptr<llvm::IRBuilder<>> builder;
+	std::unique_ptr<llvm::TargetMachine> targetMachine;
 
 	// Scope management: stack of variable maps.
 	struct Scope {
@@ -69,6 +74,12 @@ class CodeGen {
 		bool hasConstructor = false;
 	};
 	std::map<std::string, StructInfo> structRegistry;
+
+	// Target setup.
+	void initializeTarget();
+
+	// Shared IR building (used by generate() and emitObjectFile()).
+	void buildIR(const Program& program);
 
 	// Core generation.
 	void generateFunction(const FunctionDecl& fn);

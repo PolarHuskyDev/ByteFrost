@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <cstdio>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -973,4 +975,37 @@ TEST(CodeGenStructErrors, ThreeWayCycleRejected) {
 		std::string msg = e.what();
 		EXPECT_NE(msg.find("A -> B -> C -> A"), std::string::npos);
 	}
+}
+
+// =====================
+// Object file emission
+// =====================
+
+TEST(CodeGenEmitObj, EmitsValidObjectFile) {
+	std::string source = "main(): int { return 42; }";
+	Lexer lexer(source);
+	auto tokens = lexer.tokenize();
+	Parser parser(tokens);
+	Program program = parser.parseProgram();
+
+	CodeGen codegen;
+	std::string objPath = "/tmp/bytefrost_test_emit.o";
+	codegen.emitObjectFile(program, objPath);
+
+	// Verify the file exists and has content.
+	std::ifstream f(objPath, std::ios::binary | std::ios::ate);
+	ASSERT_TRUE(f.is_open()) << "Object file was not created";
+	auto size = f.tellg();
+	ASSERT_GT(size, 0) << "Object file is empty";
+
+	// Verify ELF magic number (0x7f 'E' 'L' 'F').
+	f.seekg(0);
+	char magic[4];
+	f.read(magic, 4);
+	EXPECT_EQ(magic[0], 0x7f);
+	EXPECT_EQ(magic[1], 'E');
+	EXPECT_EQ(magic[2], 'L');
+	EXPECT_EQ(magic[3], 'F');
+
+	std::remove(objPath.c_str());
 }

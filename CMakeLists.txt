@@ -12,6 +12,7 @@ add_library(
 	src/tokenizer/lexer.cpp
 	src/parser/parser.cpp
 	src/codegen/codegen.cpp
+	src/linker/linker.cpp
 )
 
 target_include_directories(

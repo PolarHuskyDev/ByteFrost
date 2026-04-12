@@ -3,10 +3,9 @@
 # test_compiled.sh — End-to-end test for ByteFrost compiled programs.
 #
 # For each .bf test file, this script:
-#   1. Compiles the .bf source to LLVM IR using byte_frost --emit-ir
-#   2. Compiles the IR to an executable using clang
-#   3. Runs the executable and captures stdout
-#   4. Compares stdout against the expected output
+#   1. Compiles the .bf source directly to an executable using byte_frost
+#   2. Runs the executable and captures stdout
+#   3. Compares stdout against the expected output
 #
 # Usage:
 #   ./scripts/test_compiled.sh [-v|--verbose] [path/to/byte_frost]
@@ -62,25 +61,16 @@ run_test() {
 
     TOTAL=$((TOTAL + 1))
 
-    # Step 1: Compile .bf -> .ll
-    local ll_file="$TMP_DIR/${name}.ll"
-    if ! "$COMPILER" "$bf_file" --emit-ir -o "$ll_file" 2>"$TMP_DIR/${name}.compile_err"; then
+    # Step 1: Compile .bf -> executable directly
+    local exe_file="$TMP_DIR/${name}"
+    if ! "$COMPILER" "$bf_file" -o "$exe_file" 2>"$TMP_DIR/${name}.compile_err"; then
         echo -e "  ${RED}FAIL${NC} $name — compilation failed"
         cat "$TMP_DIR/${name}.compile_err" | sed 's/^/    /'
         FAIL=$((FAIL + 1))
         return
     fi
 
-    # Step 2: Compile .ll -> executable
-    local exe_file="$TMP_DIR/${name}"
-    if ! clang "$ll_file" -o "$exe_file" -lm 2>"$TMP_DIR/${name}.link_err"; then
-        echo -e "  ${RED}FAIL${NC} $name — linking failed"
-        cat "$TMP_DIR/${name}.link_err" | sed 's/^/    /'
-        FAIL=$((FAIL + 1))
-        return
-    fi
-
-    # Step 3: Run the executable with a timeout.
+    # Step 2: Run the executable with a timeout.
     local actual
     if ! actual=$(timeout "$timeout_secs" "$exe_file" 2>"$TMP_DIR/${name}.run_err"); then
         local exit_code=$?
