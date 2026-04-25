@@ -3,6 +3,7 @@
 #include <iostream>
 
 #include "codegen/codegen.h"
+#include "linker/linker.h"
 #include "parser/parser.h"
 #include "tokenizer/lexer.h"
 #include "tokenizer/tokens.h"
@@ -10,11 +11,14 @@
 int main(int argc, char* argv[]) {
 	const char* filename = "tests/fib.bf";
 	bool emitIR = false;
+	bool emitObj = false;
 	std::string outputFile;
 
 	for (int i = 1; i < argc; i++) {
 		if (std::strcmp(argv[i], "--emit-ir") == 0) {
 			emitIR = true;
+		} else if (std::strcmp(argv[i], "--emit-obj") == 0) {
+			emitObj = true;
 		} else if (std::strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
 			outputFile = argv[++i];
 		} else {
@@ -55,27 +59,30 @@ int main(int argc, char* argv[]) {
 			} else {
 				std::cout << ir;
 			}
+		} else if (emitObj) {
+			// Emit native object file
+			CodeGen codegen;
+			std::string objPath = outputFile.empty() ? "output.o" : outputFile;
+			codegen.emitObjectFile(program, objPath);
 		} else {
-			// Default: print tokens and AST summary.
-			std::printf("=== Tokens ===\n");
-			for (const auto& token : tokens) {
-				std::printf("%s\n", token.toString().c_str());
+			// Default: compile + link → executable.
+			CodeGen codegen;
+			std::string tmpObj = outputFile + ".tmp.o";
+			if (outputFile.empty()) {
+				outputFile = "a.out";
+				tmpObj = "a.out.tmp.o";
 			}
+			codegen.emitObjectFile(program, tmpObj);
 
-			std::printf("\n=== AST Summary ===\n");
-			std::printf("Functions: %zu\n", program.functions.size());
-			for (const auto& fn : program.functions) {
-				std::printf("  fn %s(%zu params) -> %s [%zu statements]\n",
-							fn->name.c_str(),
-							fn->params.size(),
-							fn->returnType->name.c_str(),
-							fn->body.statements.size());
-			}
-			std::printf("Structs: %zu\n", program.structs.size());
-			for (const auto& s : program.structs) {
-				std::printf("  struct %s [%zu members]\n",
-							s->name.c_str(),
-							s->members.size());
+			try {
+				Linker::Config linkConfig;
+				linkConfig.objectFile = tmpObj;
+				linkConfig.outputFile = outputFile;
+				Linker::link(linkConfig);
+				std::remove(tmpObj.c_str());
+			} catch (...) {
+				std::remove(tmpObj.c_str());
+				throw;
 			}
 		}
 	} catch (const ParseError& e) {
@@ -83,6 +90,9 @@ int main(int argc, char* argv[]) {
 		return 1;
 	} catch (const CodeGenError& e) {
 		std::cerr << "Codegen error: " << e.what() << std::endl;
+		return 1;
+	} catch (const LinkerError& e) {
+		std::cerr << "Linker error: " << e.what() << std::endl;
 		return 1;
 	}
 
