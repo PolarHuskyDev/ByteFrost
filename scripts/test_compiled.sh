@@ -155,6 +155,11 @@ run_test "containers" "$TESTS_DIR/containers.bf" "$CONTAINERS_EXPECTED"
 # --- composition.bf ---
 run_test "composition" "$TESTS_DIR/composition.bf" "Circle center: (10, 20), radius: 5.5"
 
+# --- trig_function.bf ---
+# Tests sin(PI/2) ≈ 1, cos(PI) ≈ -1, tan(PI/4) ≈ 1. We allow some tolerance for floating point differences.
+TRIG_EXPECTED="$(printf '1\n-1\n1')"
+run_test "trig_function" "$TESTS_DIR/trig_function.bf" "$TRIG_EXPECTED"
+
 echo ""
 echo "=== Results ==="
 echo -e "  ${GREEN}Passed: $PASS${NC}"
