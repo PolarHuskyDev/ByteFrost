@@ -71,8 +71,14 @@ void Linker::link(const Config& config) {
 		args.push_back("-L" + p);
 	}
 
-	// Input object file.
-	args.push_back(config.objectFile);
+	// Input object file(s).
+	if (!config.objectFiles.empty()) {
+		for (const auto& obj : config.objectFiles) {
+			args.push_back(obj);
+		}
+	} else {
+		args.push_back(config.objectFile);
+	}
 
 	// Libraries (user-specified + standard).
 	for (const auto& lib : config.extraLibs) {

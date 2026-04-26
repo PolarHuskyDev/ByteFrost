@@ -1,6 +1,7 @@
 #include "module_resolver/module_resolver.h"
 
 #include <llvm/Support/FileSystem.h>
+#include <llvm/Support/Path.h>
 
 #include <algorithm>
 #include <system_error>
@@ -34,9 +35,8 @@ void ModuleResolver::walk(const std::string& dir, const std::string& prefix) {
 		llvm::sys::fs::file_status st;
 		if (llvm::sys::fs::status(path, st)) continue;  // skip on error
 
-		// Extract the base name of this entry.
-		auto sepPos = path.rfind('/');
-		std::string name = (sepPos == std::string::npos) ? path : path.substr(sepPos + 1);
+		// Extract the base name of this entry using portable path utilities.
+		std::string name = llvm::sys::path::filename(path).str();
 
 		if (llvm::sys::fs::is_directory(st)) {
 			std::string childPrefix = prefix.empty() ? name : (prefix + "." + name);

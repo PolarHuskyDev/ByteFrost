@@ -2219,13 +2219,16 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 		throw CodeGenError("Unsupported callee expression");
 	}
 
-	// Resolve import alias: 'myAbs' → 'abs' (the name declared as extern).
-	auto aliasIt = importAliases_.find(fnName);
-	if (aliasIt != importAliases_.end()) {
-		fnName = aliasIt->second;
-	}
-
+	// Prefer a real function defined in the current module. Only resolve an
+	// import alias when no function with the original source-level name exists,
+	// so a local definition of e.g. 'myAbs' is never silently bypassed.
 	llvm::Function* fn = module->getFunction(fnName);
+	if (!fn) {
+		auto aliasIt = importAliases_.find(fnName);
+		if (aliasIt != importAliases_.end()) {
+			fn = module->getFunction(aliasIt->second);
+		}
+	}
 	if (!fn) throw CodeGenError("Undefined function: " + fnName);
 
 	std::vector<llvm::Value*> args;
@@ -2543,8 +2546,10 @@ llvm::Value* CodeGen::generateMathCall(const std::string& name,
 		bool isFloat = a->getType()->isDoubleTy() || a->getType()->isFloatTy() ||
 		               b->getType()->isDoubleTy() || b->getType()->isFloatTy();
 		if (isFloat) {
-			if (!a->getType()->isDoubleTy()) a = builder->CreateFPExt(a, f64, "min.a");
-			if (!b->getType()->isDoubleTy()) b = builder->CreateFPExt(b, f64, "min.b");
+			if (a->getType()->isIntegerTy())      a = builder->CreateSIToFP(a, f64, "min.a");
+			else if (!a->getType()->isDoubleTy()) a = builder->CreateFPExt(a, f64, "min.a");
+			if (b->getType()->isIntegerTy())      b = builder->CreateSIToFP(b, f64, "min.b");
+			else if (!b->getType()->isDoubleTy()) b = builder->CreateFPExt(b, f64, "min.b");
 			return builder->CreateCall(getIntrinsic(llvm::Intrinsic::minnum), {a, b}, "min");
 		}
 		if (!a->getType()->isIntegerTy(64)) a = builder->CreateSExt(a, i64, "min.a");
@@ -2561,8 +2566,10 @@ llvm::Value* CodeGen::generateMathCall(const std::string& name,
 		bool isFloat = a->getType()->isDoubleTy() || a->getType()->isFloatTy() ||
 		               b->getType()->isDoubleTy() || b->getType()->isFloatTy();
 		if (isFloat) {
-			if (!a->getType()->isDoubleTy()) a = builder->CreateFPExt(a, f64, "max.a");
-			if (!b->getType()->isDoubleTy()) b = builder->CreateFPExt(b, f64, "max.b");
+			if (a->getType()->isIntegerTy())      a = builder->CreateSIToFP(a, f64, "max.a");
+			else if (!a->getType()->isDoubleTy()) a = builder->CreateFPExt(a, f64, "max.a");
+			if (b->getType()->isIntegerTy())      b = builder->CreateSIToFP(b, f64, "max.b");
+			else if (!b->getType()->isDoubleTy()) b = builder->CreateFPExt(b, f64, "max.b");
 			return builder->CreateCall(getIntrinsic(llvm::Intrinsic::maxnum), {a, b}, "max");
 		}
 		if (!a->getType()->isIntegerTy(64)) a = builder->CreateSExt(a, i64, "max.a");

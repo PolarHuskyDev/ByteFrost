@@ -12,7 +12,8 @@ class LinkerError : public std::runtime_error {
 class Linker {
    public:
 	struct Config {
-		std::string objectFile;
+		std::string objectFile;                  // single object (kept for compatibility)
+		std::vector<std::string> objectFiles;    // all object files to link (preferred when non-empty)
 		std::string outputFile = "a.out";
 		std::vector<std::string> extraLibs;      // additional -l flags
 		std::vector<std::string> extraLibPaths;  // additional -L flags

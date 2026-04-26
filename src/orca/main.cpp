@@ -270,6 +270,35 @@ static std::string compileFile(const std::string& srcPath, const std::string& bu
 }
 
 // ==========================
+// Emit IR for one .bf file → .ll
+// ==========================
+
+static std::string emitIRFile(const std::string& srcPath, const std::string& buildDir,
+                               const Program& program,
+                               const std::vector<const FunctionDecl*>& externs) {
+	// Derive output .ll path from source path (same logic as compileFile).
+	std::string irName = srcPath;
+	for (char& c : irName) {
+		if (c == '/' || c == '\\') c = '_';
+	}
+	if (irName.size() > 3 && irName.substr(irName.size() - 3) == ".bf") {
+		irName = irName.substr(0, irName.size() - 3);
+	}
+	std::string irPath = buildDir + "/" + irName + ".ll";
+
+	CodeGen codegen;
+	for (const auto* fn : externs) {
+		codegen.declareExternFunction(*fn);
+	}
+	std::string irStr = codegen.generate(program);
+
+	std::ofstream out(irPath);
+	if (!out.is_open()) throw std::runtime_error("Cannot write IR file: " + irPath);
+	out << irStr;
+	return irPath;
+}
+
+// ==========================
 // orca init
 // ==========================
 
@@ -332,8 +361,10 @@ static int cmdInit(const std::string& name) {
 	}
 
 	// Create directories.
-	if (std::system(("mkdir -p " + root + "/src").c_str()) != 0) {
-		std::cerr << "[orca] Error: Failed to create project directories.\n";
+	std::error_code mkdirEc;
+	std::filesystem::create_directories(root + "/src", mkdirEc);
+	if (mkdirEc) {
+		std::cerr << "[orca] Error: Failed to create project directories: " << mkdirEc.message() << "\n";
 		return 1;
 	}
 
@@ -532,12 +563,22 @@ int main(int argc, char* argv[]) {
 			try {
 				auto progIt = parsedPrograms.find(mod);
 				if (progIt == parsedPrograms.end()) continue;
-				std::string objPath = compileFile(file, buildDir, progIt->second, externs);
-				objectFiles.push_back(objPath);
+				if (emitIR) {
+					std::string irPath = emitIRFile(file, buildDir, progIt->second, externs);
+					std::cout << "[orca] IR written: " << irPath << "\n";
+				} else {
+					std::string objPath = compileFile(file, buildDir, progIt->second, externs);
+					objectFiles.push_back(objPath);
+				}
 			} catch (const CodeGenError& e) {
 				std::cerr << "Codegen error in " << file << ": " << e.what() << "\n";
 				return 1;
 			}
+		}
+
+		if (emitIR) {
+			std::cout << "[orca] IR files written to " << buildDir << "\n";
+			return 0;
 		}
 
 		if (emitObj) {
@@ -559,29 +600,10 @@ int main(int argc, char* argv[]) {
 		// everything into one combined object using `ld -r` (partial link) and
 		// then do the final link.
 
-		std::string combinedObj = buildDir + "/combined.o";
-
-		if (objectFiles.size() == 1) {
-			combinedObj = objectFiles[0];
-		} else {
-			// Partial link: ld -r -o combined.o <objs...>
-			std::string ldCmd = "ld -r -o " + combinedObj;
-			for (const auto& obj : objectFiles) {
-				ldCmd += " " + obj;
-			}
-			int rc = std::system(ldCmd.c_str());
-			if (rc != 0) {
-				std::cerr << "[orca] Partial link failed.\n";
-				return 1;
-			}
-		}
-
 		std::cout << "[orca] Linking → " << outputFile << "\n";
 		Linker::Config linkConfig;
-		linkConfig.objectFile = combinedObj;
+		linkConfig.objectFiles = objectFiles;
 		linkConfig.outputFile = outputFile;
-
-		std::string tmpObj = combinedObj + ".final.o";
 		try {
 			Linker::link(linkConfig);
 		} catch (const LinkerError& e) {
