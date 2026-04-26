@@ -23,8 +23,8 @@
 #include <tokenizer/tokens.h>
 
 #include <algorithm>
-#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -133,6 +133,14 @@ static std::vector<std::string> extractImports(const std::string& filePath) {
 				if (i < tokens.size() && tokens[i].type == TokenType::IDENTIFIER_TOKEN) {
 					moduleSegments.push_back(tokens[i].value);
 					++i;
+				}
+			}
+			// Now check: did we hit 'as' (alias)? If so, skip alias identifier and continue.
+			// e.g. "import abs as myAbs from math.utils" — consume 'as myAbs', then look for 'from'.
+			if (i < tokens.size() && tokens[i].type == TokenType::AS_TOKEN) {
+				++i;  // skip 'as'
+				if (i < tokens.size() && tokens[i].type == TokenType::IDENTIFIER_TOKEN) {
+					++i;  // skip alias name
 				}
 			}
 			// Now check: did we hit 'from'? If so, discard moduleSegments and read the path after 'from'.
@@ -290,12 +298,13 @@ static void printHelp() {
 
 /// Write a file, creating any missing parent directories.
 static void writeFile(const std::string& path, const std::string& content) {
-	// Create parent directory (simple: walk up and mkdir -p the parent).
-	auto sep = path.rfind('/');
-	if (sep != std::string::npos) {
-		std::string dir = path.substr(0, sep);
-		if (std::system(("mkdir -p " + dir).c_str()) != 0) {
-			throw std::runtime_error("Failed to create directory: " + dir);
+	std::filesystem::path filePath(path);
+	std::filesystem::path dir = filePath.parent_path();
+	if (!dir.empty()) {
+		std::error_code ec;
+		std::filesystem::create_directories(dir, ec);
+		if (ec) {
+			throw std::runtime_error("Failed to create directory: " + dir.string());
 		}
 	}
 	std::ofstream f(path);
@@ -439,8 +448,10 @@ int main(int argc, char* argv[]) {
 		std::string buildDir = projectRoot + "/build/orca";
 
 		// Create build directory.
-		if (std::system(("mkdir -p " + buildDir).c_str()) != 0) {
-			throw std::runtime_error("Failed to create build directory: " + buildDir);
+		{
+			std::error_code ec;
+			std::filesystem::create_directories(buildDir, ec);
+			if (ec) throw std::runtime_error("Failed to create build directory: " + buildDir);
 		}
 
 		// 2. Scan for all .bf modules under src/
@@ -462,6 +473,21 @@ int main(int argc, char* argv[]) {
 		const std::string entryMod = "__entry__";
 		modToFile[entryMod] = entryFile;
 		deps[entryMod] = extractImports(entryFile);
+
+		// Validate that every imported module path resolves to a known file.
+		// Fail fast with a clear error rather than silently producing missing symbols.
+		for (const auto& [mod, imports] : deps) {
+			const std::string& srcFile = modToFile.at(mod);
+			for (const auto& imp : imports) {
+				if (modToFile.find(imp) == modToFile.end()) {
+					std::cerr << "[orca] Error: " << srcFile
+					          << ": cannot resolve import '" << imp << "'\n"
+					          << "       No .bf file found for module path '"
+					          << imp << "' under " << srcRoot << "\n";
+					return 1;
+				}
+			}
+		}
 
 		// 4. Topological sort: start from entry.
 		TopoSorter sorter{deps, {}, {}, {}};

@@ -76,6 +76,29 @@ void CodeGen::initializeTarget() {
 void CodeGen::buildIR(const Program& program) {
 	declareBuiltins();
 
+	// Process import declarations:
+	//  - Collect alias mappings (import sin as mySin from ...).
+	//  - Register namespace imports (import math.utils → "utils").
+	//  - Fail fast if a stdlib math name is imported without an alias — the
+	//    unaliased name would silently resolve to the intrinsic instead of
+	//    the imported function, which is always a bug.
+	importAliases_.clear();
+	namespaceNames_.clear();
+	for (const auto& imp : program.imports) {
+		if (imp->isNamespaceImport && !imp->modulePath.empty()) {
+			namespaceNames_.insert(imp->modulePath.back());
+		}
+		for (const auto& item : imp->items) {
+			if (!item.alias.empty()) {
+				importAliases_[item.alias] = item.name;
+			} else if (stdlibMathNames().count(item.name)) {
+				throw CodeGenError(
+					"Importing '" + item.name + "' conflicts with the stdlib math function "
+					"of the same name. Use an alias: import " + item.name + " as <alias> from ...;");
+			}
+		}
+	}
+
 	// Detect stdlib math function conflicts.
 	// If a user defines a function whose name matches a stdlib math function
 	// without marking it 'overridden', emit a clear compile-time error.
@@ -2107,6 +2130,24 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 		llvm::Value* objPtr = nullptr;
 
 		if (auto* ident = dynamic_cast<const IdentifierExpr*>(memberAccess->object.get())) {
+			// Namespace import qualified call: utils.abs(-7) where 'utils' was introduced
+			// by 'import math.utils;'.  Resolved directly to the LLVM function; no stdlib
+			// intercept, since the qualification makes intent unambiguous.
+			if (namespaceNames_.count(ident->name)) {
+				llvm::Function* fn = module->getFunction(memberAccess->member);
+				if (!fn) throw CodeGenError(
+					"Undefined function '" + memberAccess->member +
+					"' in module namespace '" + ident->name + "'");
+				std::vector<llvm::Value*> callArgs;
+				for (const auto& arg : expr.arguments)
+					callArgs.push_back(generateExpression(*arg));
+				if (fn->getReturnType()->isVoidTy()) {
+					builder->CreateCall(fn, callArgs);
+					return llvm::Constant::getNullValue(llvm::Type::getInt64Ty(*context));
+				}
+				return builder->CreateCall(fn, callArgs, "nscall");
+			}
+
 			bfType = lookupVarBFTypeName(ident->name);
 
 			// Array built-ins
@@ -2176,6 +2217,12 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 		fnName = callee->name;
 	} else {
 		throw CodeGenError("Unsupported callee expression");
+	}
+
+	// Resolve import alias: 'myAbs' → 'abs' (the name declared as extern).
+	auto aliasIt = importAliases_.find(fnName);
+	if (aliasIt != importAliases_.end()) {
+		fnName = aliasIt->second;
 	}
 
 	llvm::Function* fn = module->getFunction(fnName);

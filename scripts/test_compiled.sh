@@ -209,6 +209,45 @@ run_orca_test() {
     fi
 }
 
+# ---------------------------------------------------------------------------
+# run_orca_negative_test NAME TOML_PATH [EXPECTED_ERR_SUBSTRING]
+#   Build an orca project and verify the build FAILS (non-zero exit).
+#   Optionally, check that stderr contains EXPECTED_ERR_SUBSTRING.
+# ---------------------------------------------------------------------------
+run_orca_negative_test() {
+    local name="$1"
+    local toml_path="$2"
+    local expected_err="${3:-}"
+
+    TOTAL=$((TOTAL + 1))
+
+    local orca_bin
+    orca_bin="$(dirname "$COMPILER")/orca"
+
+    if "$orca_bin" --project "$toml_path" \
+            2>"$TMP_DIR/${name}.build_err" 1>/dev/null; then
+        echo -e "  ${RED}FAIL${NC} $name — expected orca build failure but it succeeded"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    if [ -n "$expected_err" ]; then
+        if grep -qF "$expected_err" "$TMP_DIR/${name}.build_err"; then
+            echo -e "  ${GREEN}PASS${NC} $name (correctly rejected with expected error)"
+            PASS=$((PASS + 1))
+        else
+            echo -e "  ${RED}FAIL${NC} $name — orca rejected but error message didn't match"
+            echo "    Expected stderr to contain: $expected_err"
+            echo "    Actual stderr:"
+            cat "$TMP_DIR/${name}.build_err" | sed 's/^/      /'
+            FAIL=$((FAIL + 1))
+        fi
+    else
+        echo -e "  ${GREEN}PASS${NC} $name (correctly rejected)"
+        PASS=$((PASS + 1))
+    fi
+}
+
 echo "=== ByteFrost Compiled Tests ==="
 echo "Compiler: $COMPILER"
 echo ""
@@ -269,6 +308,21 @@ echo ""
 echo "--- Orca Multi-Module Tests ---"
 MODULE_EXPECTED="$(printf '25\n12\n12')"
 run_orca_test "module_example" "$TESTS_DIR/module_example/orca.toml" "$MODULE_EXPECTED"
+
+# --- overridden_import_alias: import abs as myAbs from math.utils ---
+run_orca_test "overridden_import_alias" \
+    "$TESTS_DIR/overridden_import_alias/orca.toml" \
+    "$(printf '7\n3\n42')"
+
+# --- overridden_import_qualified: import math.utils; utils.abs() ---
+run_orca_test "overridden_import_qualified" \
+    "$TESTS_DIR/overridden_import_qualified/orca.toml" \
+    "$(printf '7\n3\n42')"
+
+# --- overridden_import_direct_negative: import abs from math.utils (no alias → must fail) ---
+run_orca_negative_test "overridden_import_direct_neg" \
+    "$TESTS_DIR/overridden_import_direct_negative/orca.toml" \
+    "conflicts with"
 
 echo ""
 echo "=== Results ==="

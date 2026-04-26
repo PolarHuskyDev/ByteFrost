@@ -4,6 +4,8 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "llvm/IR/BasicBlock.h"
@@ -72,6 +74,14 @@ class CodeGen {
 
 	// Names of stdlib math functions overridden by the current program.
 	std::set<std::string> overriddenMathFuncs_;
+
+	// Import alias map: local alias name → original function name.
+	// e.g. 'import abs as myAbs from math.utils' → importAliases_["myAbs"] = "abs"
+	std::unordered_map<std::string, std::string> importAliases_;
+
+	// Namespace import local names (last segment of the module path).
+	// e.g. 'import math.utils' → namespaceNames_.insert("utils")
+	std::unordered_set<std::string> namespaceNames_;
 
 	// Struct type registry.
 	struct StructInfo {
