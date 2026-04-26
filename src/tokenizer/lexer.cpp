@@ -19,6 +19,7 @@ const std::unordered_map<std::string, TokenType> Lexer::keywords = {
 	{"struct", TokenType::STRUCT_TOKEN},
 	{"true", TokenType::TRUE_TOKEN},
 	{"false", TokenType::FALSE_TOKEN},
+	{"null", TokenType::NULL_TOKEN},
 	{"this", TokenType::THIS_TOKEN},
 	{"in", TokenType::IN_TOKEN},
 	{"void", TokenType::VOID_TOKEN},

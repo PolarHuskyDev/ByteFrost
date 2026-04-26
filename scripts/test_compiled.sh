@@ -324,6 +324,15 @@ run_orca_negative_test "overridden_import_direct_neg" \
     "$TESTS_DIR/overridden_import_direct_negative/orca.toml" \
     "conflicts with"
 
+# --- null_safety: nullable struct semantics ---
+# Tests: default null, explicit null, constructor init, reassign to null, struct-literal init.
+# No negative (null-dereference) test here: that would be a runtime segfault, not a compile
+# error. Compile-time null-dereference detection is deferred to Phase 7 (semantic analysis).
+echo ""
+echo "--- Nullable Struct Tests ---"
+NULL_SAFETY_EXPECTED="$(printf 'PASS: r is null by default\nPASS: r is null via explicit assignment\nPASS: r is not null, area = 12\nPASS: r is null after reassignment\nPASS: struct init, area = 30')"
+run_orca_test "null_safety" "$TESTS_DIR/null_safety/orca.toml" "$NULL_SAFETY_EXPECTED"
+
 echo ""
 echo "=== Results ==="
 echo -e "  ${GREEN}Passed: $PASS${NC}"

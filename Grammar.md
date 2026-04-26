@@ -58,7 +58,6 @@ type =
     | "string"
     | "void"
     | identifier
-    | type "?"
     | "array" "<" type ">"
     | "slice" "<" type ">"
     | "map" "<" type "," type ">" ;

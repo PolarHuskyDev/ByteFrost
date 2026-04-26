@@ -568,7 +568,9 @@ TEST(CodeGenStructs, StructInit) {
 		}
 	)");
 	assertIRContains(ir, "%Point = type { i64, i64 }");
-	assertIRContains(ir, "alloca %Point");
+	// Structs are heap-allocated: variable slot is a ptr, struct data is malloc'd.
+	assertIRContains(ir, "alloca ptr");
+	assertIRContains(ir, "call ptr @malloc");
 	assertIRContains(ir, "getelementptr inbounds %Point");
 }
 

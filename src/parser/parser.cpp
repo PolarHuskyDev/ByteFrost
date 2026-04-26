@@ -267,9 +267,6 @@ std::unique_ptr<TypeNode> Parser::parseType() {
 		error("Expected type");
 	}
 
-	// Optional type: type?
-	// We don't have a QUESTION_TOKEN, so skip for now
-
 	return typeNode;
 }
 
@@ -789,6 +786,14 @@ ExprPtr Parser::parsePrimary() {
 	if (check(TokenType::FALSE_TOKEN)) {
 		advance();
 		auto expr = std::make_unique<BoolLiteralExpr>(false);
+		expr->line = startLine;
+		expr->column = startCol;
+		return expr;
+	}
+
+	if (check(TokenType::NULL_TOKEN)) {
+		advance();
+		auto expr = std::make_unique<NullLiteralExpr>();
 		expr->line = startLine;
 		expr->column = startCol;
 		return expr;
