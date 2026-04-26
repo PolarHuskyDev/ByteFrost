@@ -30,6 +30,11 @@ const std::unordered_map<std::string, TokenType> Lexer::keywords = {
 	{"array", TokenType::ARRAY_TOKEN},
 	{"slice", TokenType::SLICE_TOKEN},
 	{"map", TokenType::MAP_TOKEN},
+	{"import", TokenType::IMPORT_TOKEN},
+	{"export", TokenType::EXPORT_TOKEN},
+	{"from", TokenType::FROM_TOKEN},
+	{"as", TokenType::AS_TOKEN},
+	{"overridden", TokenType::OVERRIDDEN_TOKEN},
 };
 
 // ==========================

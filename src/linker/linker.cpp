@@ -14,16 +14,26 @@
 
 void Linker::link(const Config& config) {
 	std::string linkerPath = findLinker();
-	std::string dynamicLinker = findDynamicLinker();
+
+	// Resolve emulation string: use config if provided, else auto-detect.
+	std::string emulation = config.linkerEmulation.empty()
+	    ? detectLinkerEmulation()
+	    : config.linkerEmulation;
+
+	// Resolve dynamic linker path: use config if provided, else detect from emulation.
+	std::string dynLinker = config.dynamicLinker.empty()
+	    ? findDynamicLinker(emulation)
+	    : config.dynamicLinker;
+
 	std::vector<std::string> gccLibPaths = detectGCCLibPaths();
-	std::vector<std::string> sysLibPaths = detectSystemLibPaths();
+	std::vector<std::string> sysLibPaths = detectSystemLibPaths(emulation);
 
 	// Locate CRT objects.
-	std::string scrt1 = findCRTObject("Scrt1.o");
-	std::string crti = findCRTObject("crti.o");
-	std::string crtn = findCRTObject("crtn.o");
-	std::string crtbegin = findCRTObject("crtbeginS.o");
-	std::string crtend = findCRTObject("crtendS.o");
+	std::string scrt1    = findCRTObject("Scrt1.o",    config.crtSearchPaths);
+	std::string crti     = findCRTObject("crti.o",     config.crtSearchPaths);
+	std::string crtn     = findCRTObject("crtn.o",     config.crtSearchPaths);
+	std::string crtbegin = findCRTObject("crtbeginS.o", config.crtSearchPaths);
+	std::string crtend   = findCRTObject("crtendS.o",  config.crtSearchPaths);
 
 	// Build the linker command line, mirroring what clang would produce.
 	std::vector<std::string> args;
@@ -36,10 +46,10 @@ void Linker::link(const Config& config) {
 	args.push_back("--build-id");
 	args.push_back("--eh-frame-hdr");
 	args.push_back("-m");
-	args.push_back("elf_x86_64");
+	args.push_back(emulation);
 	args.push_back("-pie");
 	args.push_back("-dynamic-linker");
-	args.push_back(dynamicLinker);
+	args.push_back(dynLinker);
 
 	// Output.
 	args.push_back("-o");
@@ -143,17 +153,26 @@ static std::string captureCommand(const std::string& cmd) {
 	return result;
 }
 
-std::string Linker::findCRTObject(const std::string& name) {
+std::string Linker::findCRTObject(const std::string& name,
+                                   const std::vector<std::string>& extraSearchPaths) {
 	// Strategy 1: Ask GCC.
 	std::string path = captureCommand("gcc -print-file-name=" + name + " 2>/dev/null");
 	if (!path.empty() && path != name && llvm::sys::fs::exists(path)) {
 		return path;
 	}
 
-	// Strategy 2: Well-known paths.
+	// Strategy 2: Caller-supplied paths first.
+	for (const auto& dir : extraSearchPaths) {
+		std::string candidate = dir + "/" + name;
+		if (llvm::sys::fs::exists(candidate)) return candidate;
+	}
+
+	// Strategy 3: Well-known paths.
 	static const std::vector<std::string> searchPaths = {
 		"/usr/lib/x86_64-linux-gnu",
 		"/lib/x86_64-linux-gnu",
+		"/usr/lib/aarch64-linux-gnu",
+		"/lib/aarch64-linux-gnu",
 		"/usr/lib64",
 		"/lib64",
 		"/usr/lib",
@@ -181,16 +200,64 @@ std::string Linker::findCRTObject(const std::string& name) {
 	throw LinkerError("Could not find CRT object: " + name);
 }
 
-std::string Linker::findDynamicLinker() {
-	// Standard path on x86_64 Linux.
-	const std::string path = "/lib64/ld-linux-x86-64.so.2";
-	if (llvm::sys::fs::exists(path)) return path;
+// Map linker emulation string to the dynamic linker paths for that ABI.
+std::string Linker::findDynamicLinker(const std::string& linkerEmulation) {
+	// Build a list of candidate paths based on the emulation string.
+	std::vector<std::string> candidates;
 
-	// Fallback for some distributions.
-	const std::string alt = "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2";
-	if (llvm::sys::fs::exists(alt)) return alt;
+	if (linkerEmulation == "elf_x86_64") {
+		candidates = {
+			"/lib64/ld-linux-x86-64.so.2",
+			"/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+		};
+	} else if (linkerEmulation == "elf_i386") {
+		candidates = {
+			"/lib/ld-linux.so.2",
+			"/lib/i386-linux-gnu/ld-linux.so.2",
+		};
+	} else if (linkerEmulation == "aarch64linux") {
+		candidates = {
+			"/lib/ld-linux-aarch64.so.1",
+			"/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1",
+		};
+	} else if (linkerEmulation == "armelf_linux_eabi") {
+		candidates = {
+			"/lib/ld-linux-armhf.so.3",
+			"/lib/arm-linux-gnueabihf/ld-linux-armhf.so.3",
+			"/lib/ld-linux.so.3",
+		};
+	} else {
+		// Unknown emulation: try to find via gcc -dumpmachine
+		std::string triple = captureCommand("gcc -dumpmachine 2>/dev/null");
+		if (!triple.empty()) {
+			candidates.push_back("/lib/" + triple + "/ld.so.1");
+			candidates.push_back("/lib/ld.so.1");
+		}
+	}
 
-	throw LinkerError("Could not find dynamic linker (ld-linux-x86-64.so.2)");
+	for (const auto& p : candidates) {
+		if (llvm::sys::fs::exists(p)) return p;
+	}
+
+	throw LinkerError("Could not find dynamic linker for emulation: " + linkerEmulation);
+}
+
+// Auto-detect the linker emulation string for the current host.
+std::string Linker::detectLinkerEmulation() {
+	std::string triple = captureCommand("gcc -dumpmachine 2>/dev/null");
+	if (triple.empty()) {
+		// Last-resort guess based on sizeof(void*).
+		return (sizeof(void*) == 8) ? "elf_x86_64" : "elf_i386";
+	}
+
+	if (triple.find("x86_64") != std::string::npos)  return "elf_x86_64";
+	if (triple.find("i386") != std::string::npos ||
+	    triple.find("i686") != std::string::npos)     return "elf_i386";
+	if (triple.find("aarch64") != std::string::npos) return "aarch64linux";
+	if (triple.find("arm") != std::string::npos)     return "armelf_linux_eabi";
+
+	// Unknown — return empty; caller will throw or handle gracefully.
+	throw LinkerError("Could not determine linker emulation for target triple: " + triple);
 }
 
 std::vector<std::string> Linker::detectGCCLibPaths() {
@@ -213,16 +280,37 @@ std::vector<std::string> Linker::detectGCCLibPaths() {
 	return paths;
 }
 
-std::vector<std::string> Linker::detectSystemLibPaths() {
+std::vector<std::string> Linker::detectSystemLibPaths(const std::string& linkerEmulation) {
 	std::vector<std::string> paths;
-	static const std::vector<std::string> candidates = {
-		"/lib/x86_64-linux-gnu",
-		"/lib64",
-		"/usr/lib/x86_64-linux-gnu",
-		"/usr/lib64",
-		"/lib",
-		"/usr/lib",
-	};
+
+	std::vector<std::string> candidates;
+	if (linkerEmulation == "elf_x86_64") {
+		candidates = {
+			"/lib/x86_64-linux-gnu",
+			"/lib64",
+			"/usr/lib/x86_64-linux-gnu",
+			"/usr/lib64",
+			"/lib",
+			"/usr/lib",
+		};
+	} else if (linkerEmulation == "elf_i386") {
+		candidates = {
+			"/lib/i386-linux-gnu",
+			"/lib",
+			"/usr/lib/i386-linux-gnu",
+			"/usr/lib",
+		};
+	} else if (linkerEmulation == "aarch64linux") {
+		candidates = {
+			"/lib/aarch64-linux-gnu",
+			"/usr/lib/aarch64-linux-gnu",
+			"/lib",
+			"/usr/lib",
+		};
+	} else {
+		candidates = {"/lib", "/usr/lib"};
+	}
+
 	for (const auto& p : candidates) {
 		if (llvm::sys::fs::is_directory(p)) {
 			paths.push_back(p);

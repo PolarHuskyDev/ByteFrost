@@ -53,6 +53,10 @@ else
     NC=''
 fi
 
+# ---------------------------------------------------------------------------
+# run_test NAME BF_FILE EXPECTED_OUTPUT [TIMEOUT]
+#   Compile a .bf file and verify its stdout matches EXPECTED_OUTPUT.
+# ---------------------------------------------------------------------------
 run_test() {
     local name="$1"
     local bf_file="$2"
@@ -113,6 +117,98 @@ skip_test() {
     echo -e "  ${YELLOW}SKIP${NC} $name — $reason"
 }
 
+# ---------------------------------------------------------------------------
+# run_negative_test NAME BF_FILE [EXPECTED_ERR_SUBSTRING]
+#   Compile a .bf file and verify the compiler REJECTS it (non-zero exit).
+#   Optionally, check that stderr contains EXPECTED_ERR_SUBSTRING.
+# ---------------------------------------------------------------------------
+run_negative_test() {
+    local name="$1"
+    local bf_file="$2"
+    local expected_err="${3:-}"
+
+    TOTAL=$((TOTAL + 1))
+
+    local exe_file="$TMP_DIR/${name}"
+    if "$COMPILER" "$bf_file" -o "$exe_file" 2>"$TMP_DIR/${name}.compile_err"; then
+        echo -e "  ${RED}FAIL${NC} $name — expected compilation failure but it succeeded"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    if [ -n "$expected_err" ]; then
+        if grep -qF "$expected_err" "$TMP_DIR/${name}.compile_err"; then
+            echo -e "  ${GREEN}PASS${NC} $name (correctly rejected with expected error)"
+            PASS=$((PASS + 1))
+        else
+            echo -e "  ${RED}FAIL${NC} $name — compiler rejected but error message didn't match"
+            echo "    Expected stderr to contain: $expected_err"
+            echo "    Actual stderr:"
+            cat "$TMP_DIR/${name}.compile_err" | sed 's/^/      /'
+            FAIL=$((FAIL + 1))
+        fi
+    else
+        echo -e "  ${GREEN}PASS${NC} $name (correctly rejected)"
+        PASS=$((PASS + 1))
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# run_orca_test NAME TOML_PATH EXPECTED_OUTPUT [TIMEOUT]
+#   Build an orca project and verify its stdout matches EXPECTED_OUTPUT.
+# ---------------------------------------------------------------------------
+run_orca_test() {
+    local name="$1"
+    local toml_path="$2"
+    local expected="$3"
+    local timeout_secs="${4:-30}"
+
+    TOTAL=$((TOTAL + 1))
+
+    local exe_file="$TMP_DIR/${name}"
+    local orca_bin
+    orca_bin="$(dirname "$COMPILER")/orca"
+
+    if ! "$orca_bin" --project "$toml_path" -o "$exe_file" \
+            2>"$TMP_DIR/${name}.compile_err" 1>"$TMP_DIR/${name}.orca_out"; then
+        echo -e "  ${RED}FAIL${NC} $name — orca build failed"
+        cat "$TMP_DIR/${name}.compile_err" | sed 's/^/    /'
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    local actual
+    if ! actual=$(timeout "$timeout_secs" "$exe_file" 2>"$TMP_DIR/${name}.run_err"); then
+        local exit_code=$?
+        if [ $exit_code -eq 124 ]; then
+            echo -e "  ${RED}FAIL${NC} $name — timed out after ${timeout_secs}s"
+        else
+            echo -e "  ${RED}FAIL${NC} $name — runtime error (exit code $exit_code)"
+            cat "$TMP_DIR/${name}.run_err" | sed 's/^/    /'
+        fi
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    if [ "$VERBOSE" = true ]; then
+        echo -e "  --- $name output ---"
+        echo "$actual" | sed 's/^/    /'
+        echo -e "  ---"
+    fi
+
+    if [ "$actual" = "$expected" ]; then
+        echo -e "  ${GREEN}PASS${NC} $name"
+        PASS=$((PASS + 1))
+    else
+        echo -e "  ${RED}FAIL${NC} $name — output mismatch"
+        echo "    Expected:"
+        echo "$expected" | sed 's/^/      /'
+        echo "    Actual:"
+        echo "$actual" | sed 's/^/      /'
+        FAIL=$((FAIL + 1))
+    fi
+}
+
 echo "=== ByteFrost Compiled Tests ==="
 echo "Compiler: $COMPILER"
 echo ""
@@ -155,10 +251,24 @@ run_test "containers" "$TESTS_DIR/containers.bf" "$CONTAINERS_EXPECTED"
 # --- composition.bf ---
 run_test "composition" "$TESTS_DIR/composition.bf" "Circle center: (10, 20), radius: 5.5"
 
-# --- trig_function.bf ---
-# Tests sin(PI/2) ≈ 1, cos(PI) ≈ -1, tan(PI/4) ≈ 1. We allow some tolerance for floating point differences.
+# --- trig_function.bf (negative: must fail — conflicts with stdlib without 'overridden') ---
+echo ""
+echo "--- Negative Tests ---"
+run_negative_test "trig_function_no_override" \
+    "$TESTS_DIR/trig_function.bf" \
+    "conflicts with a stdlib math function"
+
+# --- trig_function_overridden.bf (positive: user-defined math with 'overridden') ---
+echo ""
+echo "--- Stdlib Override Tests ---"
 TRIG_EXPECTED="$(printf '1\n-1\n1')"
-run_test "trig_function" "$TESTS_DIR/trig_function.bf" "$TRIG_EXPECTED"
+run_test "trig_function_overridden" "$TESTS_DIR/trig_function_overridden.bf" "$TRIG_EXPECTED"
+
+# --- module_example orca project (cross-module imports/exports) ---
+echo ""
+echo "--- Orca Multi-Module Tests ---"
+MODULE_EXPECTED="$(printf '25\n12\n12')"
+run_orca_test "module_example" "$TESTS_DIR/module_example/orca.toml" "$MODULE_EXPECTED"
 
 echo ""
 echo "=== Results ==="

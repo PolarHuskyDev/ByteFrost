@@ -1009,3 +1009,251 @@ TEST(CodeGenEmitObj, EmitsValidObjectFile) {
 
 	std::remove(objPath.c_str());
 }
+// =====================
+// Math stdlib functions
+// =====================
+
+TEST(CodeGenMath, SinFloat) {
+	std::string ir = compileToIR(R"(
+f(x: float): float { return sin(x); }
+)");
+	assertIRContains(ir, "llvm.sin.f64");
+}
+
+TEST(CodeGenMath, CosFloat) {
+	std::string ir = compileToIR(R"(
+f(x: float): float { return cos(x); }
+)");
+	assertIRContains(ir, "llvm.cos.f64");
+}
+
+TEST(CodeGenMath, TanFloat) {
+	std::string ir = compileToIR(R"(
+f(x: float): float { return tan(x); }
+)");
+	assertIRContains(ir, "declare double @tan");
+	assertIRContains(ir, "call double @tan");
+}
+
+TEST(CodeGenMath, SqrtFloat) {
+	std::string ir = compileToIR(R"(
+f(x: float): float { return sqrt(x); }
+)");
+	assertIRContains(ir, "llvm.sqrt.f64");
+}
+
+TEST(CodeGenMath, FloorFloat) {
+	std::string ir = compileToIR(R"(
+f(x: float): float { return floor(x); }
+)");
+	assertIRContains(ir, "llvm.floor.f64");
+}
+
+TEST(CodeGenMath, CeilFloat) {
+	std::string ir = compileToIR(R"(
+f(x: float): float { return ceil(x); }
+)");
+	assertIRContains(ir, "llvm.ceil.f64");
+}
+
+TEST(CodeGenMath, RoundFloat) {
+	std::string ir = compileToIR(R"(
+f(x: float): float { return round(x); }
+)");
+	assertIRContains(ir, "llvm.round.f64");
+}
+
+TEST(CodeGenMath, PowFloatFloat) {
+	std::string ir = compileToIR(R"(
+f(b: float, e: float): float { return pow(b, e); }
+)");
+	assertIRContains(ir, "llvm.pow.f64");
+}
+
+TEST(CodeGenMath, LogFloat) {
+	std::string ir = compileToIR(R"(
+f(x: float): float { return log(x); }
+)");
+	assertIRContains(ir, "llvm.log.f64");
+}
+
+TEST(CodeGenMath, Log2Float) {
+	std::string ir = compileToIR(R"(
+f(x: float): float { return log2(x); }
+)");
+	assertIRContains(ir, "llvm.log2.f64");
+}
+
+TEST(CodeGenMath, Log10Float) {
+	std::string ir = compileToIR(R"(
+f(x: float): float { return log10(x); }
+)");
+	assertIRContains(ir, "llvm.log10.f64");
+}
+
+TEST(CodeGenMath, ExpFloat) {
+	std::string ir = compileToIR(R"(
+f(x: float): float { return exp(x); }
+)");
+	assertIRContains(ir, "llvm.exp.f64");
+}
+
+TEST(CodeGenMath, AbsFloat) {
+	std::string ir = compileToIR(R"(
+f(x: float): float { return abs(x); }
+)");
+	assertIRContains(ir, "llvm.fabs.f64");
+}
+
+TEST(CodeGenMath, AbsInt) {
+	std::string ir = compileToIR(R"(
+f(x: int): int { return abs(x); }
+)");
+	// Integer abs: negate + select
+	assertIRContains(ir, "sub i64");
+	assertIRContains(ir, "icmp slt i64");
+	assertIRContains(ir, "select");
+}
+
+TEST(CodeGenMath, MinInt) {
+	std::string ir = compileToIR(R"(
+f(a: int, b: int): int { return min(a, b); }
+)");
+	assertIRContains(ir, "icmp slt i64");
+	assertIRContains(ir, "select");
+}
+
+TEST(CodeGenMath, MaxInt) {
+	std::string ir = compileToIR(R"(
+f(a: int, b: int): int { return max(a, b); }
+)");
+	assertIRContains(ir, "icmp sgt i64");
+	assertIRContains(ir, "select");
+}
+
+TEST(CodeGenMath, MinFloat) {
+	std::string ir = compileToIR(R"(
+f(a: float, b: float): float { return min(a, b); }
+)");
+	assertIRContains(ir, "llvm.minnum.f64");
+}
+
+TEST(CodeGenMath, MaxFloat) {
+	std::string ir = compileToIR(R"(
+f(a: float, b: float): float { return max(a, b); }
+)");
+	assertIRContains(ir, "llvm.maxnum.f64");
+}
+
+TEST(CodeGenMath, PowIntInt) {
+	// pow() with int args should still emit float pow after int->float conversion
+	std::string ir = compileToIR(R"(
+f(b: int, e: int): float { return pow(b, e); }
+)");
+	assertIRContains(ir, "llvm.pow.f64");
+	assertIRContains(ir, "sitofp");
+}
+
+// ==========================
+// CodeGenStdlibConflict: functions that shadow stdlib without 'overridden'
+// ==========================
+
+TEST(CodeGenStdlibConflict, ThrowsOnSinWithoutOverridden) {
+	// Defining 'sin' without 'overridden' must throw a CodeGenError.
+	EXPECT_THROW(
+		compileToIR("sin(x: float): float { return x; }"),
+		CodeGenError
+	);
+}
+
+TEST(CodeGenStdlibConflict, ErrorMentionsOverridden) {
+	// The error message should guide the user toward the 'overridden' keyword.
+	try {
+		compileToIR("sin(x: float): float { return x; }");
+		FAIL() << "Expected CodeGenError";
+	} catch (const CodeGenError& e) {
+		EXPECT_NE(std::string(e.what()).find("overridden"), std::string::npos);
+	}
+}
+
+TEST(CodeGenStdlibConflict, ThrowsOnCosWithoutOverridden) {
+	EXPECT_THROW(
+		compileToIR("cos(x: float): float { return x; }"),
+		CodeGenError
+	);
+}
+
+TEST(CodeGenStdlibConflict, ThrowsOnAbsWithoutOverridden) {
+	EXPECT_THROW(
+		compileToIR("abs(x: float): float { return x; }"),
+		CodeGenError
+	);
+}
+
+TEST(CodeGenStdlibConflict, FirstConflictReported) {
+	// When multiple conflicting functions exist, the compiler should throw on
+	// the first one it encounters (abs precedes sin in source order here).
+	try {
+		compileToIR(R"(
+abs(x: float): float { return x; }
+sin(x: float): float { return x; }
+)");
+		FAIL() << "Expected CodeGenError";
+	} catch (const CodeGenError& e) {
+		// Should mention 'abs', the first conflicting name encountered.
+		EXPECT_NE(std::string(e.what()).find("abs"), std::string::npos);
+	}
+}
+
+// ==========================
+// CodeGenStdlibOverride: functions that correctly use 'overridden'
+// ==========================
+
+TEST(CodeGenStdlibOverride, OverriddenSinUsesUserImpl) {
+	// 'overridden sin' should emit a user-defined function body, not llvm.sin.
+	std::string ir = compileToIR("overridden sin(x: float): float { return x; }");
+	assertIRContains(ir, "define double @sin");
+	// No LLVM intrinsic call
+	EXPECT_EQ(ir.find("llvm.sin"), std::string::npos);
+}
+
+TEST(CodeGenStdlibOverride, OverriddenTanHasNoExternDecl) {
+	// When tan is overridden, the compiler should NOT emit a C extern declaration
+	// for @tan — only the user-defined function body.
+	std::string ir = compileToIR("overridden tan(x: float): float { return x; }");
+	assertIRContains(ir, "define double @tan");
+	// 'declare double @tan' is the C extern signature — must not appear when overriding
+	EXPECT_EQ(ir.find("declare double @tan"), std::string::npos);
+}
+
+TEST(CodeGenStdlibOverride, OverriddenCosCallUsesUserImpl) {
+	// A call to cos() should dispatch to the user's 'overridden cos', not the intrinsic.
+	std::string ir = compileToIR(R"(
+overridden cos(x: float): float { return x * 2.0; }
+f(): float { return cos(1.0); }
+)");
+	assertIRContains(ir, "define double @cos");
+	EXPECT_EQ(ir.find("llvm.cos"), std::string::npos);
+}
+
+TEST(CodeGenStdlibOverride, NonOverriddenMathStillUsesIntrinsic) {
+	// If only tan is overridden, calls to sin() must still use the LLVM intrinsic.
+	std::string ir = compileToIR(R"(
+overridden tan(x: float): float { return x; }
+f(x: float): float { return sin(x); }
+)");
+	assertIRContains(ir, "llvm.sin.f64");
+}
+
+TEST(CodeGenStdlibOverride, MultipleOverridesAllDispatchToUser) {
+	// Overriding sin and cos should route both to user bodies.
+	std::string ir = compileToIR(R"(
+overridden sin(x: float): float { return x; }
+overridden cos(x: float): float { return x; }
+f(x: float): float { return sin(x) + cos(x); }
+)");
+	assertIRContains(ir, "define double @sin");
+	assertIRContains(ir, "define double @cos");
+	EXPECT_EQ(ir.find("llvm.sin"), std::string::npos);
+	EXPECT_EQ(ir.find("llvm.cos"), std::string::npos);
+}

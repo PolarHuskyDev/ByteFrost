@@ -23,6 +23,7 @@ class Parser {
 
    private:
 	// Top-level
+	std::unique_ptr<ImportDecl> parseImportDecl();
 	std::unique_ptr<FunctionDecl> parseFunctionDecl();
 	std::unique_ptr<StructDecl> parseStructDecl();
 
