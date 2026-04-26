@@ -13,6 +13,7 @@ add_library(
 	src/parser/parser.cpp
 	src/codegen/codegen.cpp
 	src/linker/linker.cpp
+	src/module_resolver/module_resolver.cpp
 )
 
 target_include_directories(
@@ -31,6 +32,14 @@ add_executable(
 
 target_link_libraries(byte_frost byte_frost_lib)
 
+# Orca build orchestrator
+add_executable(
+	orca
+	src/orca/main.cpp
+)
+
+target_link_libraries(orca byte_frost_lib)
+
 # Tests
 enable_testing()
 
@@ -46,7 +55,7 @@ target_link_libraries(unit_tests byte_frost_lib GTest::gtest GTest::gtest_main)
 include(GoogleTest)
 gtest_discover_tests(unit_tests)
 
-install(TARGETS byte_frost DESTINATION "."
+install(TARGETS byte_frost orca DESTINATION "."
         RUNTIME DESTINATION bin
         ARCHIVE DESTINATION lib
         LIBRARY DESTINATION lib

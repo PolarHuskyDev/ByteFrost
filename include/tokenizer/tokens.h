@@ -44,6 +44,11 @@ enum class TokenType {
 	ARRAY_TOKEN,
 	SLICE_TOKEN,
 	MAP_TOKEN,
+	IMPORT_TOKEN,
+	EXPORT_TOKEN,
+	FROM_TOKEN,
+	AS_TOKEN,
+	OVERRIDDEN_TOKEN,
 
 	// Arithmetic operators
 	PLUS_TOKEN,       // +

@@ -1187,3 +1187,132 @@ main(): int {
 	EXPECT_EQ(interp->fragments.size(), 3u);  // "", " and ", ""
 	EXPECT_EQ(interp->expressions.size(), 2u);
 }
+
+// ============================================================
+// Module system: import statements
+// ============================================================
+
+TEST(ParserImport, NamespaceImport) {
+	auto program = parse("import math.trig;");
+	ASSERT_EQ(program.imports.size(), 1u);
+	auto& imp = *program.imports[0];
+	ASSERT_EQ(imp.modulePath.size(), 2u);
+	EXPECT_EQ(imp.modulePath[0], "math");
+	EXPECT_EQ(imp.modulePath[1], "trig");
+	EXPECT_TRUE(imp.isNamespaceImport);
+	EXPECT_TRUE(imp.items.empty());
+}
+
+TEST(ParserImport, SelectiveSingleItem) {
+	auto program = parse("import Foo from math;");
+	ASSERT_EQ(program.imports.size(), 1u);
+	auto& imp = *program.imports[0];
+	ASSERT_EQ(imp.modulePath.size(), 1u);
+	EXPECT_EQ(imp.modulePath[0], "math");
+	EXPECT_FALSE(imp.isNamespaceImport);
+	ASSERT_EQ(imp.items.size(), 1u);
+	EXPECT_EQ(imp.items[0].name, "Foo");
+	EXPECT_TRUE(imp.items[0].alias.empty());
+}
+
+TEST(ParserImport, SelectiveWithAlias) {
+	auto program = parse("import Foo as F from math;");
+	ASSERT_EQ(program.imports.size(), 1u);
+	auto& imp = *program.imports[0];
+	ASSERT_EQ(imp.items.size(), 1u);
+	EXPECT_EQ(imp.items[0].name, "Foo");
+	EXPECT_EQ(imp.items[0].alias, "F");
+}
+
+TEST(ParserImport, SelectiveMultipleItems) {
+	auto program = parse("import Foo, Bar from math;");
+	ASSERT_EQ(program.imports.size(), 1u);
+	auto& imp = *program.imports[0];
+	ASSERT_EQ(imp.items.size(), 2u);
+	EXPECT_EQ(imp.items[0].name, "Foo");
+	EXPECT_EQ(imp.items[1].name, "Bar");
+}
+
+TEST(ParserImport, SelectiveMultipleItemsWithAlias) {
+	auto program = parse("import Foo, Bar as B from math.utils;");
+	ASSERT_EQ(program.imports.size(), 1u);
+	auto& imp = *program.imports[0];
+	ASSERT_EQ(imp.modulePath.size(), 2u);
+	EXPECT_EQ(imp.modulePath[0], "math");
+	EXPECT_EQ(imp.modulePath[1], "utils");
+	ASSERT_EQ(imp.items.size(), 2u);
+	EXPECT_EQ(imp.items[0].name, "Foo");
+	EXPECT_TRUE(imp.items[0].alias.empty());
+	EXPECT_EQ(imp.items[1].name, "Bar");
+	EXPECT_EQ(imp.items[1].alias, "B");
+}
+
+TEST(ParserImport, MultipleImportStatements) {
+	auto program = parse(R"(
+import foo.bar;
+import Baz from foo.baz;
+main(): int { return 0; }
+)");
+	ASSERT_EQ(program.imports.size(), 2u);
+	EXPECT_TRUE(program.imports[0]->isNamespaceImport);
+	EXPECT_FALSE(program.imports[1]->isNamespaceImport);
+	ASSERT_EQ(program.functions.size(), 1u);
+}
+
+// ============================================================
+// Module system: export modifier
+// ============================================================
+
+TEST(ParserExport, ExportedFunction) {
+	auto program = parse("export foo(): int { return 0; }");
+	ASSERT_EQ(program.functions.size(), 1u);
+	EXPECT_TRUE(program.functions[0]->isExported);
+	EXPECT_FALSE(program.functions[0]->isOverridden);
+	EXPECT_EQ(program.functions[0]->name, "foo");
+}
+
+TEST(ParserExport, NonExportedFunction) {
+	auto program = parse("foo(): int { return 0; }");
+	ASSERT_EQ(program.functions.size(), 1u);
+	EXPECT_FALSE(program.functions[0]->isExported);
+}
+
+TEST(ParserExport, ExportedStruct) {
+	auto program = parse("export struct Point { x: int; y: int; }");
+	ASSERT_EQ(program.structs.size(), 1u);
+	EXPECT_TRUE(program.structs[0]->isExported);
+	EXPECT_EQ(program.structs[0]->name, "Point");
+}
+
+TEST(ParserExport, NonExportedStruct) {
+	auto program = parse("struct Box { w: int; }");
+	ASSERT_EQ(program.structs.size(), 1u);
+	EXPECT_FALSE(program.structs[0]->isExported);
+}
+
+// ============================================================
+// Module system: overridden modifier
+// ============================================================
+
+TEST(ParserOverridden, OverriddenAlone) {
+	// overridden without export is still valid syntax
+	auto program = parse("overridden floor(x: float): float { return x; }");
+	ASSERT_EQ(program.functions.size(), 1u);
+	EXPECT_FALSE(program.functions[0]->isExported);
+	EXPECT_TRUE(program.functions[0]->isOverridden);
+	EXPECT_EQ(program.functions[0]->name, "floor");
+}
+
+TEST(ParserOverridden, ExportOverridden) {
+	auto program = parse("export overridden sin(x: float): float { return x; }");
+	ASSERT_EQ(program.functions.size(), 1u);
+	EXPECT_TRUE(program.functions[0]->isExported);
+	EXPECT_TRUE(program.functions[0]->isOverridden);
+	EXPECT_EQ(program.functions[0]->name, "sin");
+}
+
+TEST(ParserOverridden, RegularFunctionNotOverridden) {
+	auto program = parse("compute(x: int): int { return x; }");
+	ASSERT_EQ(program.functions.size(), 1u);
+	EXPECT_FALSE(program.functions[0]->isOverridden);
+}

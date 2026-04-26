@@ -2,7 +2,10 @@
 
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "llvm/IR/BasicBlock.h"
@@ -10,6 +13,7 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
@@ -32,6 +36,10 @@ class CodeGen {
 
 	/// Compile the program and write a native object file to disk.
 	void emitObjectFile(const Program& program, const std::string& outputPath);
+
+	/// Inject an extern (no-body) function declaration into the current module.
+	/// Used by orca to satisfy cross-module call sites before codegen.
+	void declareExternFunction(const FunctionDecl& fn);
 
 	/// Access the module (for unit testing).
 	llvm::Module& getModule() { return *module; }
@@ -63,6 +71,17 @@ class CodeGen {
 	llvm::Function* reallocFunc = nullptr;
 	llvm::Function* freeFunc = nullptr;
 	llvm::Function* snprintfFunc = nullptr;
+
+	// Names of stdlib math functions overridden by the current program.
+	std::set<std::string> overriddenMathFuncs_;
+
+	// Import alias map: local alias name → original function name.
+	// e.g. 'import abs as myAbs from math.utils' → importAliases_["myAbs"] = "abs"
+	std::unordered_map<std::string, std::string> importAliases_;
+
+	// Namespace import local names (last segment of the module path).
+	// e.g. 'import math.utils' → namespaceNames_.insert("utils")
+	std::unordered_set<std::string> namespaceNames_;
 
 	// Struct type registry.
 	struct StructInfo {
@@ -130,6 +149,12 @@ class CodeGen {
 
 	// Built-in print handling.
 	llvm::Value* generatePrintCall(const std::vector<ExprPtr>& args);
+
+	// Math stdlib dispatch.
+	llvm::Value* generateMathCall(const std::string& name, const std::vector<ExprPtr>& args);
+
+	// The set of stdlib math function names (populated once, used everywhere).
+	static const std::set<std::string>& stdlibMathNames();
 	void generatePrintArray(llvm::AllocaInst* arrAlloca, llvm::Type* elemType);
 	void generatePrintMap(llvm::AllocaInst* mapAlloca, llvm::Type* keyType, llvm::Type* valType);
 

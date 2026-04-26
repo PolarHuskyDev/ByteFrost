@@ -14,6 +14,18 @@
 #include <sstream>
 
 // ==========================
+// Static stdlib math name set
+// ==========================
+
+const std::set<std::string>& CodeGen::stdlibMathNames() {
+	static const std::set<std::string> names = {
+		"sin", "cos", "tan", "sqrt", "pow", "floor", "ceil", "round",
+		"abs", "log", "log2", "log10", "exp", "min", "max"
+	};
+	return names;
+}
+
+// ==========================
 // Constructor
 // ==========================
 
@@ -63,6 +75,44 @@ void CodeGen::initializeTarget() {
 
 void CodeGen::buildIR(const Program& program) {
 	declareBuiltins();
+
+	// Process import declarations:
+	//  - Collect alias mappings (import sin as mySin from ...).
+	//  - Register namespace imports (import math.utils → "utils").
+	//  - Fail fast if a stdlib math name is imported without an alias — the
+	//    unaliased name would silently resolve to the intrinsic instead of
+	//    the imported function, which is always a bug.
+	importAliases_.clear();
+	namespaceNames_.clear();
+	for (const auto& imp : program.imports) {
+		if (imp->isNamespaceImport && !imp->modulePath.empty()) {
+			namespaceNames_.insert(imp->modulePath.back());
+		}
+		for (const auto& item : imp->items) {
+			if (!item.alias.empty()) {
+				importAliases_[item.alias] = item.name;
+			} else if (stdlibMathNames().count(item.name)) {
+				throw CodeGenError(
+					"Importing '" + item.name + "' conflicts with the stdlib math function "
+					"of the same name. Use an alias: import " + item.name + " as <alias> from ...;");
+			}
+		}
+	}
+
+	// Detect stdlib math function conflicts.
+	// If a user defines a function whose name matches a stdlib math function
+	// without marking it 'overridden', emit a clear compile-time error.
+	overriddenMathFuncs_.clear();
+	for (const auto& fn : program.functions) {
+		if (stdlibMathNames().count(fn->name)) {
+			if (!fn->isOverridden) {
+				throw CodeGenError(
+					"Function '" + fn->name + "' conflicts with a stdlib math function. "
+					"Use 'overridden' to shadow it.");
+			}
+			overriddenMathFuncs_.insert(fn->name);
+		}
+	}
 
 	// Register all struct types first (so they can be referenced).
 	registerStructTypes(program);
@@ -114,6 +164,24 @@ void CodeGen::emitObjectFile(const Program& program, const std::string& outputPa
 }
 
 // ==========================
+// Extern function declaration
+// (used by orca for cross-module calls)
+// ==========================
+
+void CodeGen::declareExternFunction(const FunctionDecl& fn) {
+	// If the function is already known (declared or defined), skip.
+	if (module->getFunction(fn.name)) return;
+
+	std::vector<llvm::Type*> paramTypes;
+	for (const auto& param : fn.params) {
+		paramTypes.push_back(getLLVMType(*param.type));
+	}
+	llvm::Type* retType = getLLVMType(*fn.returnType);
+	auto funcType = llvm::FunctionType::get(retType, paramTypes, false);
+	llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, fn.name, module.get());
+}
+
+// ==========================
 // Built-in declarations
 // ==========================
 
@@ -145,6 +213,9 @@ void CodeGen::declareBuiltins() {
 	// snprintf(char* buf, size_t size, const char* fmt, ...) -> i32
 	auto snprintfType = llvm::FunctionType::get(i32, {i8Ptr, i64, i8Ptr}, true);
 	snprintfFunc = llvm::Function::Create(snprintfType, llvm::Function::ExternalLinkage, "snprintf", module.get());
+
+	// Math stdlib: tan(double) -> double  (no LLVM intrinsic available).
+	// Declared lazily in generateMathCall to avoid collision with user-defined 'overridden tan'.
 }
 
 // ==========================
@@ -2025,6 +2096,12 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 		return generatePrintCall(expr.arguments);
 	}
 
+	// Check for math stdlib functions.
+	if (callee && stdlibMathNames().count(callee->name) &&
+	    !overriddenMathFuncs_.count(callee->name)) {
+		return generateMathCall(callee->name, expr.arguments);
+	}
+
 	// Check for constructor call: StructName(args...)
 	if (callee) {
 		auto structIt = structRegistry.find(callee->name);
@@ -2053,6 +2130,24 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 		llvm::Value* objPtr = nullptr;
 
 		if (auto* ident = dynamic_cast<const IdentifierExpr*>(memberAccess->object.get())) {
+			// Namespace import qualified call: utils.abs(-7) where 'utils' was introduced
+			// by 'import math.utils;'.  Resolved directly to the LLVM function; no stdlib
+			// intercept, since the qualification makes intent unambiguous.
+			if (namespaceNames_.count(ident->name)) {
+				llvm::Function* fn = module->getFunction(memberAccess->member);
+				if (!fn) throw CodeGenError(
+					"Undefined function '" + memberAccess->member +
+					"' in module namespace '" + ident->name + "'");
+				std::vector<llvm::Value*> callArgs;
+				for (const auto& arg : expr.arguments)
+					callArgs.push_back(generateExpression(*arg));
+				if (fn->getReturnType()->isVoidTy()) {
+					builder->CreateCall(fn, callArgs);
+					return llvm::Constant::getNullValue(llvm::Type::getInt64Ty(*context));
+				}
+				return builder->CreateCall(fn, callArgs, "nscall");
+			}
+
 			bfType = lookupVarBFTypeName(ident->name);
 
 			// Array built-ins
@@ -2124,7 +2219,16 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 		throw CodeGenError("Unsupported callee expression");
 	}
 
+	// Prefer a real function defined in the current module. Only resolve an
+	// import alias when no function with the original source-level name exists,
+	// so a local definition of e.g. 'myAbs' is never silently bypassed.
 	llvm::Function* fn = module->getFunction(fnName);
+	if (!fn) {
+		auto aliasIt = importAliases_.find(fnName);
+		if (aliasIt != importAliases_.end()) {
+			fn = module->getFunction(aliasIt->second);
+		}
+	}
 	if (!fn) throw CodeGenError("Undefined function: " + fnName);
 
 	std::vector<llvm::Value*> args;
@@ -2401,4 +2505,119 @@ void CodeGen::generatePrintMap(llvm::AllocaInst* mapAlloca, llvm::Type* keyType,
 	builder->SetInsertPoint(doneBB);
 	llvm::Value* closeFmt = builder->CreateGlobalStringPtr("}\n", "map.close");
 	builder->CreateCall(printfFunc, {closeFmt});
+}
+
+// ==========================
+// Math stdlib
+// ==========================
+
+llvm::Value* CodeGen::generateMathCall(const std::string& name,
+                                        const std::vector<ExprPtr>& args) {
+	auto* f64 = llvm::Type::getDoubleTy(*context);
+	auto* i64 = llvm::Type::getInt64Ty(*context);
+
+	// Helper: get or create an LLVM intrinsic declaration for f64.
+	auto getIntrinsic = [&](llvm::Intrinsic::ID id,
+	                         std::vector<llvm::Type*> types = {}) -> llvm::Function* {
+		if (types.empty()) types = {f64};
+		return llvm::Intrinsic::getDeclaration(module.get(), id, types);
+	};
+
+	// --- abs(x) ---
+	if (name == "abs") {
+		if (args.size() != 1) throw CodeGenError("abs() requires exactly 1 argument");
+		llvm::Value* val = generateExpression(*args[0]);
+		if (val->getType()->isDoubleTy() || val->getType()->isFloatTy()) {
+			if (!val->getType()->isDoubleTy()) val = builder->CreateFPExt(val, f64, "abs.promote");
+			return builder->CreateCall(getIntrinsic(llvm::Intrinsic::fabs), {val}, "abs");
+		}
+		// Integer: abs via compare and negate.
+		if (!val->getType()->isIntegerTy(64)) val = builder->CreateSExt(val, i64, "abs.ext");
+		llvm::Value* neg = builder->CreateNeg(val, "abs.neg");
+		llvm::Value* isNeg = builder->CreateICmpSLT(val, llvm::ConstantInt::get(i64, 0), "abs.isneg");
+		return builder->CreateSelect(isNeg, neg, val, "abs");
+	}
+
+	// --- min(a, b) ---
+	if (name == "min") {
+		if (args.size() != 2) throw CodeGenError("min() requires exactly 2 arguments");
+		llvm::Value* a = generateExpression(*args[0]);
+		llvm::Value* b = generateExpression(*args[1]);
+		bool isFloat = a->getType()->isDoubleTy() || a->getType()->isFloatTy() ||
+		               b->getType()->isDoubleTy() || b->getType()->isFloatTy();
+		if (isFloat) {
+			if (a->getType()->isIntegerTy())      a = builder->CreateSIToFP(a, f64, "min.a");
+			else if (!a->getType()->isDoubleTy()) a = builder->CreateFPExt(a, f64, "min.a");
+			if (b->getType()->isIntegerTy())      b = builder->CreateSIToFP(b, f64, "min.b");
+			else if (!b->getType()->isDoubleTy()) b = builder->CreateFPExt(b, f64, "min.b");
+			return builder->CreateCall(getIntrinsic(llvm::Intrinsic::minnum), {a, b}, "min");
+		}
+		if (!a->getType()->isIntegerTy(64)) a = builder->CreateSExt(a, i64, "min.a");
+		if (!b->getType()->isIntegerTy(64)) b = builder->CreateSExt(b, i64, "min.b");
+		llvm::Value* cmp = builder->CreateICmpSLT(a, b, "min.cmp");
+		return builder->CreateSelect(cmp, a, b, "min");
+	}
+
+	// --- max(a, b) ---
+	if (name == "max") {
+		if (args.size() != 2) throw CodeGenError("max() requires exactly 2 arguments");
+		llvm::Value* a = generateExpression(*args[0]);
+		llvm::Value* b = generateExpression(*args[1]);
+		bool isFloat = a->getType()->isDoubleTy() || a->getType()->isFloatTy() ||
+		               b->getType()->isDoubleTy() || b->getType()->isFloatTy();
+		if (isFloat) {
+			if (a->getType()->isIntegerTy())      a = builder->CreateSIToFP(a, f64, "max.a");
+			else if (!a->getType()->isDoubleTy()) a = builder->CreateFPExt(a, f64, "max.a");
+			if (b->getType()->isIntegerTy())      b = builder->CreateSIToFP(b, f64, "max.b");
+			else if (!b->getType()->isDoubleTy()) b = builder->CreateFPExt(b, f64, "max.b");
+			return builder->CreateCall(getIntrinsic(llvm::Intrinsic::maxnum), {a, b}, "max");
+		}
+		if (!a->getType()->isIntegerTy(64)) a = builder->CreateSExt(a, i64, "max.a");
+		if (!b->getType()->isIntegerTy(64)) b = builder->CreateSExt(b, i64, "max.b");
+		llvm::Value* cmp = builder->CreateICmpSGT(a, b, "max.cmp");
+		return builder->CreateSelect(cmp, a, b, "max");
+	}
+
+	// --- pow(base, exp) ---
+	if (name == "pow") {
+		if (args.size() != 2) throw CodeGenError("pow() requires exactly 2 arguments");
+		llvm::Value* base = generateExpression(*args[0]);
+		llvm::Value* exp  = generateExpression(*args[1]);
+		if (!base->getType()->isDoubleTy()) base = builder->CreateSIToFP(base, f64, "pow.base");
+		if (!exp->getType()->isDoubleTy())  exp  = builder->CreateSIToFP(exp,  f64, "pow.exp");
+		return builder->CreateCall(getIntrinsic(llvm::Intrinsic::pow, {f64}), {base, exp}, "pow");
+	}
+
+	// --- single-argument float intrinsics ---
+	if (args.size() != 1) throw CodeGenError(name + "() requires exactly 1 argument");
+	llvm::Value* val = generateExpression(*args[0]);
+	if (!val->getType()->isDoubleTy()) {
+		if (val->getType()->isIntegerTy())
+			val = builder->CreateSIToFP(val, f64, name + ".conv");
+		else
+			val = builder->CreateFPExt(val, f64, name + ".conv");
+	}
+
+	if (name == "sin")   return builder->CreateCall(getIntrinsic(llvm::Intrinsic::sin),   {val}, "sin");
+	if (name == "cos")   return builder->CreateCall(getIntrinsic(llvm::Intrinsic::cos),   {val}, "cos");
+	if (name == "tan") {
+		// tan has no LLVM intrinsic; use the C math library function.
+		// Declare lazily to avoid symbol collision if user also defines 'overridden tan'.
+		llvm::Function* tanFn = module->getFunction("tan");
+		if (!tanFn) {
+			auto tanType = llvm::FunctionType::get(f64, {f64}, false);
+			tanFn = llvm::Function::Create(tanType, llvm::Function::ExternalLinkage, "tan", module.get());
+		}
+		return builder->CreateCall(tanFn, {val}, "tan");
+	}
+	if (name == "sqrt")  return builder->CreateCall(getIntrinsic(llvm::Intrinsic::sqrt),  {val}, "sqrt");
+	if (name == "floor") return builder->CreateCall(getIntrinsic(llvm::Intrinsic::floor), {val}, "floor");
+	if (name == "ceil")  return builder->CreateCall(getIntrinsic(llvm::Intrinsic::ceil),  {val}, "ceil");
+	if (name == "round") return builder->CreateCall(getIntrinsic(llvm::Intrinsic::round), {val}, "round");
+	if (name == "log")   return builder->CreateCall(getIntrinsic(llvm::Intrinsic::log),   {val}, "log");
+	if (name == "log2")  return builder->CreateCall(getIntrinsic(llvm::Intrinsic::log2),  {val}, "log2");
+	if (name == "log10") return builder->CreateCall(getIntrinsic(llvm::Intrinsic::log10), {val}, "log10");
+	if (name == "exp")   return builder->CreateCall(getIntrinsic(llvm::Intrinsic::exp),   {val}, "exp");
+
+	throw CodeGenError("Unknown math function: " + name);
 }

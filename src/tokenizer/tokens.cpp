@@ -35,6 +35,11 @@ const char* tokenTypeToString(TokenType type) {
 		case TokenType::ARRAY_TOKEN: return "ARRAY";
 		case TokenType::SLICE_TOKEN: return "SLICE";
 		case TokenType::MAP_TOKEN: return "MAP";
+		case TokenType::IMPORT_TOKEN: return "IMPORT";
+		case TokenType::EXPORT_TOKEN: return "EXPORT";
+		case TokenType::FROM_TOKEN: return "FROM";
+		case TokenType::AS_TOKEN: return "AS";
+		case TokenType::OVERRIDDEN_TOKEN: return "OVERRIDDEN";
 		case TokenType::PLUS_TOKEN: return "PLUS";
 		case TokenType::MINUS_TOKEN: return "MINUS";
 		case TokenType::MULTIPLY_TOKEN: return "MULTIPLY";

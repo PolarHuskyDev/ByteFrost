@@ -4,12 +4,37 @@
 (* Program Structure *)
 (* ========================= *)
 
-program = { function_declaration | struct_declaration } ;
+program = { import_statement | function_declaration | struct_declaration } ;
+
+(* ========================= *)
+(* Import / Export / Override *)
+(* ========================= *)
+
+(* import_statement must appear at the top level, not inside functions or structs *)
+import_statement =
+      "import" import_list "from" module_path ";"
+    | "import" module_path ";" ;
+
+import_list = import_item { "," import_item } ;
+
+import_item = identifier [ "as" identifier ] ;
+
+(* module_path is a dot-separated sequence of folder/file names rooted at src/ *)
+(* e.g. "linker.linker" maps to src/linker/linker.bf                          *)
+module_path = identifier { "." identifier } ;
+
+(* export makes a declaration visible to other modules when imported *)
+(* overridden explicitly replaces a stdlib or previously declared function    *)
+(* with the same name and signature; illegal on structs and constants         *)
+export_modifier     = "export" ;
+overridden_modifier = "overridden" ;
 
 function_declaration =
+    [ export_modifier ] [ overridden_modifier ]
     identifier "(" parameter_list? ")" ":" type block ;
 
 struct_declaration =
+    [ export_modifier ]
     "struct" identifier "{"
         { struct_member }
     "}" ;

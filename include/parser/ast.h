@@ -230,6 +230,22 @@ struct AssignStmt : Statement {
 // Top-Level Declarations
 // ========================
 
+// A single imported symbol, optionally aliased: Foo, Bar as B
+struct ImportItem {
+	std::string name;    // original symbol name
+	std::string alias;   // local alias (empty means no alias — use original name)
+};
+
+// import Foo, Bar as B from linker.linker;
+// import linker.linker;
+struct ImportDecl {
+	std::vector<std::string> modulePath;  // e.g. ["linker", "linker"]
+	std::vector<ImportItem> items;        // empty = namespace import (qualified access)
+	bool isNamespaceImport = false;       // true when no item list (bare module import)
+	int line = 0;
+	int column = 0;
+};
+
 struct Parameter {
 	std::string name;
 	std::unique_ptr<TypeNode> type;
@@ -240,6 +256,8 @@ struct FunctionDecl {
 	std::vector<Parameter> params;
 	std::unique_ptr<TypeNode> returnType;
 	Block body;
+	bool isExported = false;
+	bool isOverridden = false;
 	int line = 0;
 	int column = 0;
 };
@@ -257,6 +275,7 @@ struct StructMember {
 struct StructDecl {
 	std::string name;
 	std::vector<StructMember> members;
+	bool isExported = false;
 	int line = 0;
 	int column = 0;
 };
@@ -266,6 +285,7 @@ struct StructDecl {
 // ========================
 
 struct Program {
+	std::vector<std::unique_ptr<ImportDecl>> imports;
 	std::vector<std::unique_ptr<FunctionDecl>> functions;
 	std::vector<std::unique_ptr<StructDecl>> structs;
 };

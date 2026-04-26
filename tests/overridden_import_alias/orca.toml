@@ -1,0 +1,4 @@
+[project]
+name    = "overridden_import_alias"
+version = "0.1.0"
+entry   = "src/main.bf"

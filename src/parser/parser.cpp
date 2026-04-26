@@ -66,7 +66,10 @@ Program Parser::parseProgram() {
 	Program program;
 
 	while (!isAtEnd()) {
-		if (check(TokenType::STRUCT_TOKEN)) {
+		if (check(TokenType::IMPORT_TOKEN)) {
+			program.imports.push_back(parseImportDecl());
+		} else if (check(TokenType::STRUCT_TOKEN) ||
+		           (check(TokenType::EXPORT_TOKEN) && peek().type == TokenType::STRUCT_TOKEN)) {
 			program.structs.push_back(parseStructDecl());
 		} else {
 			program.functions.push_back(parseFunctionDecl());
@@ -80,11 +83,88 @@ Program Parser::parseProgram() {
 // Top-level declarations
 // ==========================
 
-// function_declaration = identifier "(" parameter_list? ")" ":" type block ;
+// import_statement =
+//     "import" import_list "from" module_path ";"
+//   | "import" module_path ";" ;
+std::unique_ptr<ImportDecl> Parser::parseImportDecl() {
+	auto decl = std::make_unique<ImportDecl>();
+	decl->line = current().line;
+	decl->column = current().column;
+
+	expect(TokenType::IMPORT_TOKEN, "Expected 'import'");
+
+	// Peek ahead to decide: is this "import module.path;" or "import Foo, Bar from module.path;"?
+	// Heuristic: if the first identifier is followed by ',' or 'from', it's a selective import.
+	// If followed by '.', it could still be a module path — but 'from' later disambiguates.
+	// We read identifier segments collecting them, then decide when we hit 'from' or ';'.
+
+	// Read first identifier
+	const Token& first = expect(TokenType::IDENTIFIER_TOKEN, "Expected identifier after 'import'");
+
+	if (check(TokenType::FROM_TOKEN) ||
+	    check(TokenType::COMMA_TOKEN) ||
+	    (check(TokenType::AS_TOKEN))) {
+		// Selective import: first token is an item name (not a module path segment)
+		ImportItem item;
+		item.name = first.value;
+		if (match(TokenType::AS_TOKEN)) {
+			const Token& alias = expect(TokenType::IDENTIFIER_TOKEN, "Expected alias name after 'as'");
+			item.alias = alias.value;
+		}
+		decl->items.push_back(std::move(item));
+
+		while (match(TokenType::COMMA_TOKEN)) {
+			ImportItem next;
+			const Token& iname = expect(TokenType::IDENTIFIER_TOKEN, "Expected symbol name in import list");
+			next.name = iname.value;
+			if (match(TokenType::AS_TOKEN)) {
+				const Token& alias = expect(TokenType::IDENTIFIER_TOKEN, "Expected alias name after 'as'");
+				next.alias = alias.value;
+			}
+			decl->items.push_back(std::move(next));
+		}
+
+		expect(TokenType::FROM_TOKEN, "Expected 'from' after import list");
+
+		// Parse module path
+		const Token& mp = expect(TokenType::IDENTIFIER_TOKEN, "Expected module path after 'from'");
+		decl->modulePath.push_back(mp.value);
+		while (check(TokenType::DOT_TOKEN)) {
+			advance();
+			const Token& seg = expect(TokenType::IDENTIFIER_TOKEN, "Expected module path segment after '.'");
+			decl->modulePath.push_back(seg.value);
+		}
+		decl->isNamespaceImport = false;
+	} else {
+		// Could be a namespace import ("import linker.linker;")
+		// or a single-item selective import that lacks 'as' or ',' but we've already read the first ident.
+		// We treat it as a namespace/module-path import — collect remaining dot-separated segments.
+		decl->modulePath.push_back(first.value);
+		while (check(TokenType::DOT_TOKEN)) {
+			advance();
+			const Token& seg = expect(TokenType::IDENTIFIER_TOKEN, "Expected module path segment after '.'");
+			decl->modulePath.push_back(seg.value);
+		}
+		decl->isNamespaceImport = true;
+	}
+
+	expect(TokenType::SEMICOLON_TOKEN, "Expected ';' after import statement");
+	return decl;
+}
+
+// function_declaration = [ export ] [ overridden ] identifier "(" parameter_list? ")" ":" type block ;
 std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl() {
 	auto fn = std::make_unique<FunctionDecl>();
 	fn->line = current().line;
 	fn->column = current().column;
+
+	// Optional modifiers
+	if (match(TokenType::EXPORT_TOKEN)) {
+		fn->isExported = true;
+	}
+	if (match(TokenType::OVERRIDDEN_TOKEN)) {
+		fn->isOverridden = true;
+	}
 
 	const Token& name = expect(TokenType::IDENTIFIER_TOKEN, "Expected function name");
 	fn->name = name.value;
@@ -117,11 +197,15 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl() {
 	return fn;
 }
 
-// struct_declaration = "struct" identifier "{" { struct_member } "}" ;
+// struct_declaration = [ export ] "struct" identifier "{" { struct_member } "}" ;
 std::unique_ptr<StructDecl> Parser::parseStructDecl() {
 	auto sd = std::make_unique<StructDecl>();
 	sd->line = current().line;
 	sd->column = current().column;
+
+	if (match(TokenType::EXPORT_TOKEN)) {
+		sd->isExported = true;
+	}
 
 	expect(TokenType::STRUCT_TOKEN, "Expected 'struct'");
 	const Token& name = expect(TokenType::IDENTIFIER_TOKEN, "Expected struct name");
