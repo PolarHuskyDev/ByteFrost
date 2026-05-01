@@ -126,16 +126,15 @@ void Linker::link(const Config& config) {
 // ==========================
 
 std::string Linker::findLinker() {
-	// Prefer ld.lld, fall back to system ld.
 	auto lld = llvm::sys::findProgramByName("ld.lld");
 	if (lld)
 		return lld.get();
 
-	auto ld = llvm::sys::findProgramByName("ld");
-	if (ld)
-		return ld.get();
-
-	throw LinkerError("Could not find ld.lld or ld in PATH");
+	throw LinkerError(
+		"ld.lld not found in PATH. ByteFrost requires LLD to link programs.\n"
+		"  Linux:   sudo apt install lld\n"
+		"  Windows: winget install LLVM.LLVM\n"
+		"See https://lld.llvm.org for more information.");
 }
 
 // ==========================
