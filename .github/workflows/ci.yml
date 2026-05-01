@@ -58,6 +58,8 @@ jobs:
       - name: Set up MSVC (Windows)
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
+        env:
+          ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: "true"
 
       - name: Configure (Linux)
         if: runner.os == 'Linux'
@@ -69,13 +71,13 @@ jobs:
 
       - name: Configure (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: bash
         run: |
-          cmake -S . -B build\Release `
-            -G "Ninja" `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_TOOLCHAIN_FILE=build\Release\generators\conan_toolchain.cmake `
-            -DBF_VERSION=0.0.0-dev `
+          cmake -S . -B build/Release \
+            -G "Ninja" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE=build/Release/generators/conan_toolchain.cmake \
+            -DBF_VERSION=0.0.0-dev \
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
 
       - name: Build

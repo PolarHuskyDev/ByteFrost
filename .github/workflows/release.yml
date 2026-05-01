@@ -107,27 +107,29 @@ jobs:
       - name: Set up MSVC (Windows)
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
+        env:
+          ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: "true"
 
       - name: Configure (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: bash
         run: |
-          cmake -S . -B build\Release `
-            -G "Ninja" `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_TOOLCHAIN_FILE=build\Release\generators\conan_toolchain.cmake `
-            -DBF_VERSION="$env:BF_VERSION" `
+          cmake -S . -B build/Release \
+            -G "Ninja" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE=build/Release/generators/conan_toolchain.cmake \
+            "-DBF_VERSION=$BF_VERSION" \
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
-        run: cmake --build build\Release --target byte_frost orca
+        shell: bash
+        run: cmake --build build/Release --target byte_frost orca
 
       - name: Run unit tests (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
-        run: .\build\Release\unit_tests.exe
+        shell: bash
+        run: ./build/Release/unit_tests.exe
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
