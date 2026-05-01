@@ -1,8 +1,10 @@
 #include "codegen/codegen.h"
 
+#include <llvm/Analysis/AliasAnalysis.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/MC/TargetRegistry.h>
+#include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
@@ -55,12 +57,27 @@ void CodeGen::initializeTarget() {
 		throw CodeGenError("Failed to lookup target: " + error);
 	}
 
+	// Mirrors rustc's codegen_backend mapping:
+	//   O0 → None, O1 → Less, O2 → Default, O3 → Aggressive
+	//   Os / Oz → Default  (size opts are PassBuilder-level, not machine-level)
+	llvm::CodeGenOptLevel cgOptLevel;
+	switch (optLevel_) {
+		case OptLevel::O1: cgOptLevel = llvm::CodeGenOptLevel::Less;       break;
+		case OptLevel::O2: cgOptLevel = llvm::CodeGenOptLevel::Default;    break;
+		case OptLevel::O3: cgOptLevel = llvm::CodeGenOptLevel::Aggressive; break;
+		case OptLevel::Os: cgOptLevel = llvm::CodeGenOptLevel::Default;    break;
+		case OptLevel::Oz: cgOptLevel = llvm::CodeGenOptLevel::Default;    break;
+		default:           cgOptLevel = llvm::CodeGenOptLevel::None;       break;
+	}
+
 	targetMachine.reset(target->createTargetMachine(
 		triple,
 		"generic",
 		"",
 		llvm::TargetOptions{},
-		llvm::Reloc::PIC_));
+		llvm::Reloc::PIC_,
+		std::nullopt,
+		cgOptLevel));
 
 	if (!targetMachine) {
 		throw CodeGenError("Failed to create target machine for: " + triple);
@@ -153,13 +170,45 @@ void CodeGen::emitObjectFile(const Program& program, const std::string& outputPa
 		throw CodeGenError("Could not open output file: " + ec.message());
 	}
 
-	llvm::legacy::PassManager pass;
-	if (targetMachine->addPassesToEmitFile(pass, dest, nullptr,
+	// --- IR optimization via PassBuilder ---
+	llvm::LoopAnalysisManager     LAM;
+	llvm::FunctionAnalysisManager FAM;
+	llvm::CGSCCAnalysisManager    CGAM;
+	llvm::ModuleAnalysisManager   MAM;
+
+	llvm::PassBuilder PB(targetMachine.get());
+	PB.registerModuleAnalyses(MAM);
+	PB.registerCGSCCAnalyses(CGAM);
+	PB.registerFunctionAnalyses(FAM);
+	PB.registerLoopAnalyses(LAM);
+	PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+	// Mirrors Rust opt-level: 0→O0, 1→O1, 2→O2, 3→O3, "s"→Os, "z"→Oz
+	llvm::OptimizationLevel pbLevel = llvm::OptimizationLevel::O0;
+	switch (optLevel_) {
+		case OptLevel::O1: pbLevel = llvm::OptimizationLevel::O1; break;
+		case OptLevel::O2: pbLevel = llvm::OptimizationLevel::O2; break;
+		case OptLevel::O3: pbLevel = llvm::OptimizationLevel::O3; break;
+		case OptLevel::Os: pbLevel = llvm::OptimizationLevel::Os; break;
+		case OptLevel::Oz: pbLevel = llvm::OptimizationLevel::Oz; break;
+		default: break;
+	}
+
+	llvm::ModulePassManager MPM;
+	if (pbLevel != llvm::OptimizationLevel::O0) {
+		MPM = PB.buildPerModuleDefaultPipeline(pbLevel);
+	}
+	MPM.run(*module, MAM);
+
+	// --- Machine-code emission via legacy PM (still required for addPassesToEmitFile) ---
+	// As of LLVM 19, addPassesToEmitFile lives on the legacy PM; both PMs are needed.
+	llvm::legacy::PassManager codegenPass;
+	if (targetMachine->addPassesToEmitFile(codegenPass, dest, nullptr,
 										   llvm::CodeGenFileType::ObjectFile)) {
 		throw CodeGenError("Target machine cannot emit object files");
 	}
 
-	pass.run(*module);
+	codegenPass.run(*module);
 	dest.flush();
 }
 
@@ -1097,7 +1146,18 @@ void CodeGen::generateVarDecl(const VarDeclStmt& stmt) {
 		varType = initVal->getType();
 		auto alloca = createEntryBlockAlloca(fn, stmt.name, varType);
 		builder->CreateStore(initVal, alloca);
-		// If the inferred type is a registered struct, track its BF type name.
+		// If the result is a struct pointer (from a constructor call), track its BF type name.
+		if (varType->isPointerTy()) {
+			if (auto* callExpr = dynamic_cast<const CallExpr*>(stmt.initializer.get())) {
+				if (auto* ident = dynamic_cast<const IdentifierExpr*>(callExpr->callee.get())) {
+					if (structRegistry.count(ident->name)) {
+						declareVariable(stmt.name, alloca, varType, ident->name);
+						return;
+					}
+				}
+			}
+		}
+		// If the inferred type is a registered struct (value type path), track its BF type name.
 		if (varType->isStructTy()) {
 			auto* st = llvm::cast<llvm::StructType>(varType);
 			if (st->hasName()) {
@@ -1114,24 +1174,33 @@ void CodeGen::generateVarDecl(const VarDeclStmt& stmt) {
 		throw CodeGenError("Cannot infer type for variable: " + stmt.name);
 	}
 
-	// Check for struct type: special initialization.
+	// Check for struct type: pointer semantics (heap-allocated, default null).
 	if (varType->isStructTy()) {
 		auto structIt = structRegistry.find(bfTypeName);
 		if (structIt != structRegistry.end()) {
-			// It's a struct variable.
-			auto alloca = createEntryBlockAlloca(fn, stmt.name, varType);
+			// Struct variables are nullable heap pointers.
+			auto* ptrType = llvm::PointerType::getUnqual(*context);
+			auto alloca = createEntryBlockAlloca(fn, stmt.name, ptrType);
 			if (stmt.initializer) {
 				if (auto* structInit = dynamic_cast<const StructInitExpr*>(stmt.initializer.get())) {
-					generateStructInit(*structInit, alloca, bfTypeName);
+					// Heap-allocate and initialize the struct.
+					auto* i64 = llvm::Type::getInt64Ty(*context);
+					uint64_t structSize = module->getDataLayout().getTypeAllocSize(varType);
+					llvm::Value* heapPtr = builder->CreateCall(mallocFunc,
+						{llvm::ConstantInt::get(i64, structSize)}, stmt.name + ".heap");
+					generateStructInit(*structInit, heapPtr, bfTypeName);
+					builder->CreateStore(heapPtr, alloca);
 				} else {
+					// Other initializer: constructor result, null literal, etc.
 					llvm::Value* initVal = generateExpression(*stmt.initializer);
 					builder->CreateStore(initVal, alloca);
 				}
 			} else {
-				// Zero-init struct.
-				builder->CreateStore(llvm::Constant::getNullValue(varType), alloca);
+				// No initializer: default to null pointer.
+				builder->CreateStore(llvm::ConstantPointerNull::get(
+					llvm::cast<llvm::PointerType>(ptrType)), alloca);
 			}
-			declareVariable(stmt.name, alloca, varType, bfTypeName);
+			declareVariable(stmt.name, alloca, ptrType, bfTypeName);
 			return;
 		}
 
@@ -1768,6 +1837,9 @@ llvm::Value* CodeGen::generateExpression(const Expression& expr) {
 	if (auto* e = dynamic_cast<const MemberAccessExpr*>(&expr)) {
 		return generateMemberAccess(*e);
 	}
+	if (dynamic_cast<const NullLiteralExpr*>(&expr)) {
+		return llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(*context));
+	}
 	if (dynamic_cast<const ThisExpr*>(&expr)) {
 		// Load the this pointer.
 		llvm::Type* thisType = lookupVarType("this");
@@ -2107,20 +2179,23 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 		auto structIt = structRegistry.find(callee->name);
 		if (structIt != structRegistry.end() && structIt->second.hasConstructor) {
 			auto& info = structIt->second;
-			auto* fn = builder->GetInsertBlock()->getParent();
-			auto alloca = createEntryBlockAlloca(fn, "ctor.tmp", info.llvmType);
-			// Zero-init before calling constructor.
-			builder->CreateStore(llvm::Constant::getNullValue(info.llvmType), alloca);
-			// Call StructName.constructor(alloca, args...)
+			auto* i64 = llvm::Type::getInt64Ty(*context);
+			// Heap-allocate the struct.
+			uint64_t structSize = module->getDataLayout().getTypeAllocSize(info.llvmType);
+			llvm::Value* heapPtr = builder->CreateCall(mallocFunc,
+				{llvm::ConstantInt::get(i64, structSize)}, callee->name + ".heap");
+			// Zero-initialize before calling constructor.
+			builder->CreateStore(llvm::Constant::getNullValue(info.llvmType), heapPtr);
+			// Call StructName.constructor(heapPtr, args...)
 			llvm::Function* ctor = module->getFunction(callee->name + ".constructor");
 			if (!ctor) throw CodeGenError("Constructor not found for " + callee->name);
-			std::vector<llvm::Value*> args = {alloca};
+			std::vector<llvm::Value*> args = {heapPtr};
 			for (const auto& arg : expr.arguments) {
 				args.push_back(generateExpression(*arg));
 			}
 			builder->CreateCall(ctor, args);
-			// Return the struct by value (load from alloca).
-			return builder->CreateLoad(info.llvmType, alloca, "ctor.result");
+			// Return the heap pointer (struct is now reference-typed).
+			return heapPtr;
 		}
 	}
 

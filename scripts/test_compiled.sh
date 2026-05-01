@@ -248,7 +248,149 @@ run_orca_negative_test() {
     fi
 }
 
-echo "=== ByteFrost Compiled Tests ==="
+# ---------------------------------------------------------------------------
+# run_orca_run_test NAME TOML_PATH EXPECTED_OUTPUT [TIMEOUT]
+#   Run `orca run --project TOML_PATH -o TMP_EXE` and verify that the binary's
+#   stdout (lines not prefixed with "[orca]") matches EXPECTED_OUTPUT.
+# ---------------------------------------------------------------------------
+run_orca_run_test() {
+    local name="$1"
+    local toml_path="$2"
+    local expected="$3"
+    local timeout_secs="${4:-30}"
+
+    TOTAL=$((TOTAL + 1))
+
+    local exe_file="$TMP_DIR/${name}_run"
+    local orca_bin
+    orca_bin="$(dirname "$COMPILER")/orca"
+
+    local raw_output
+    if ! raw_output=$(timeout "$timeout_secs" "$orca_bin" run \
+            --project "$toml_path" -o "$exe_file" 2>/dev/null); then
+        local exit_code=$?
+        if [ $exit_code -eq 124 ]; then
+            echo -e "  ${RED}FAIL${NC} $name — timed out after ${timeout_secs}s"
+        else
+            echo -e "  ${RED}FAIL${NC} $name — orca run failed (exit $exit_code)"
+        fi
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    # Filter out [orca] build-diagnostic lines; the remainder is the binary's output.
+    local actual
+    actual=$(echo "$raw_output" | grep -v '^\[orca\]' || true)
+
+    if [ "$actual" = "$expected" ]; then
+        echo -e "  ${GREEN}PASS${NC} $name"
+        PASS=$((PASS + 1))
+    else
+        echo -e "  ${RED}FAIL${NC} $name — output mismatch"
+        echo "    Expected: $(echo "$expected" | head -3)"
+        echo "    Actual:   $(echo "$actual" | head -3)"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# run_orca_clean_test NAME TOML_PATH
+#   Build the orca project, then clean it, and verify build/orca/ is removed.
+# ---------------------------------------------------------------------------
+run_orca_clean_test() {
+    local name="$1"
+    local toml_path="$2"
+
+    TOTAL=$((TOTAL + 1))
+
+    local orca_bin
+    orca_bin="$(dirname "$COMPILER")/orca"
+    local toml_dir
+    toml_dir="$(dirname "$toml_path")"
+
+    # Build first to create artifacts.
+    if ! "$orca_bin" --project "$toml_path" -o "$TMP_DIR/${name}_clean_bin" \
+            >/dev/null 2>&1; then
+        echo -e "  ${RED}FAIL${NC} $name — setup build failed"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    local build_orca_dir="$toml_dir/build/orca"
+    if [ ! -d "$build_orca_dir" ]; then
+        echo -e "  ${RED}FAIL${NC} $name — build/orca not created by build step"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    # Now clean.
+    if ! "$orca_bin" clean --project "$toml_path" >/dev/null 2>&1; then
+        echo -e "  ${RED}FAIL${NC} $name — orca clean failed"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    if [ -d "$build_orca_dir" ]; then
+        echo -e "  ${RED}FAIL${NC} $name — build/orca still exists after clean"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    echo -e "  ${GREEN}PASS${NC} $name"
+    PASS=$((PASS + 1))
+}
+
+# ---------------------------------------------------------------------------
+# run_orca_check_test NAME TOML_PATH EXPECT_PASS [EXPECTED_ERR_SUBSTRING]
+#   Run `orca check --project TOML_PATH`.
+#   If EXPECT_PASS is "pass", verify exit 0.  If "fail", verify exit non-zero.
+# ---------------------------------------------------------------------------
+run_orca_check_test() {
+    local name="$1"
+    local toml_path="$2"
+    local expect_pass="$3"   # "pass" or "fail"
+    local expected_err="${4:-}"
+
+    TOTAL=$((TOTAL + 1))
+
+    local orca_bin
+    orca_bin="$(dirname "$COMPILER")/orca"
+
+    local check_stderr="$TMP_DIR/${name}.check_err"
+    if "$orca_bin" check --project "$toml_path" \
+            >/dev/null 2>"$check_stderr"; then
+        local succeeded=true
+    else
+        local succeeded=false
+    fi
+
+    if [ "$expect_pass" = "pass" ]; then
+        if [ "$succeeded" = true ]; then
+            echo -e "  ${GREEN}PASS${NC} $name"
+            PASS=$((PASS + 1))
+        else
+            echo -e "  ${RED}FAIL${NC} $name — orca check failed on valid project"
+            cat "$check_stderr" | sed 's/^/    /'
+            FAIL=$((FAIL + 1))
+        fi
+    else
+        if [ "$succeeded" = false ]; then
+            if [ -n "$expected_err" ] && ! grep -qF "$expected_err" "$check_stderr"; then
+                echo -e "  ${RED}FAIL${NC} $name — check failed but wrong error message"
+                cat "$check_stderr" | sed 's/^/    /'
+                FAIL=$((FAIL + 1))
+            else
+                echo -e "  ${GREEN}PASS${NC} $name (correctly reported error)"
+                PASS=$((PASS + 1))
+            fi
+        else
+            echo -e "  ${RED}FAIL${NC} $name — orca check passed on invalid project"
+            FAIL=$((FAIL + 1))
+        fi
+    fi
+}
+
+
 echo "Compiler: $COMPILER"
 echo ""
 
@@ -323,6 +465,44 @@ run_orca_test "overridden_import_qualified" \
 run_orca_negative_test "overridden_import_direct_neg" \
     "$TESTS_DIR/overridden_import_direct_negative/orca.toml" \
     "conflicts with"
+
+# --- null_safety: nullable struct semantics ---
+# Tests: default null, explicit null, constructor init, reassign to null, struct-literal init.
+# No negative (null-dereference) test here: that would be a runtime segfault, not a compile
+# error. Compile-time null-dereference detection is deferred to Phase 7 (semantic analysis).
+echo ""
+echo "--- Nullable Struct Tests ---"
+NULL_SAFETY_EXPECTED="$(printf 'PASS: r is null by default\nPASS: r is null via explicit assignment\nPASS: r is not null, area = 12\nPASS: r is null after reassignment\nPASS: struct init, area = 30')"
+run_orca_test "null_safety" "$TESTS_DIR/null_safety/orca.toml" "$NULL_SAFETY_EXPECTED"
+
+# --- orca subcommand tests: run / clean / check ---
+echo ""
+echo "--- Orca Subcommand Tests (run / clean / check) ---"
+
+# orca run: build then execute module_example, verifying binary output.
+run_orca_run_test "orca_run_module_example" \
+    "$TESTS_DIR/module_example/orca.toml" \
+    "$(printf '25\n12\n12')"
+
+# orca clean: build/orca/ is removed and does not re-appear.
+run_orca_clean_test "orca_clean_module_example" \
+    "$TESTS_DIR/module_example/orca.toml"
+
+# orca check: valid project reports no errors.
+run_orca_check_test "orca_check_valid" \
+    "$TESTS_DIR/module_example/orca.toml" pass
+
+# orca check: project with a syntax error is rejected.
+mkdir -p "$TMP_DIR/check_bad/src"
+cat > "$TMP_DIR/check_bad/orca.toml" << 'TOML'
+[project]
+name    = "check_bad"
+version = "0.1.0"
+entry   = "src/main.bf"
+TOML
+printf 'main(): int { x: int = ; return 0; }\n' > "$TMP_DIR/check_bad/src/main.bf"
+run_orca_check_test "orca_check_invalid" \
+    "$TMP_DIR/check_bad/orca.toml" fail "error:"
 
 echo ""
 echo "=== Results ==="

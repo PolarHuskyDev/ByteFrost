@@ -24,6 +24,7 @@ const char* tokenTypeToString(TokenType type) {
 		case TokenType::STRUCT_TOKEN: return "STRUCT";
 		case TokenType::TRUE_TOKEN: return "TRUE";
 		case TokenType::FALSE_TOKEN: return "FALSE";
+		case TokenType::NULL_TOKEN: return "NULL";
 		case TokenType::THIS_TOKEN: return "THIS";
 		case TokenType::IN_TOKEN: return "IN";
 		case TokenType::VOID_TOKEN: return "VOID";

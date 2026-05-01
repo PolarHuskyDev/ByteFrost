@@ -12,7 +12,6 @@ struct Statement;
 // Type representation
 struct TypeNode {
 	std::string name;  // "int", "float", "bool", "char", "string", "void", or user-defined
-	bool isOptional = false;  // type?
 	std::vector<std::unique_ptr<TypeNode>> typeParams;  // for array<T>, map<K,V>, slice<T>
 
 	TypeNode() = default;
@@ -58,6 +57,8 @@ struct BoolLiteralExpr : Expression {
 	bool value;
 	BoolLiteralExpr(bool value) : value(value) {}
 };
+
+struct NullLiteralExpr : Expression {};
 
 struct IdentifierExpr : Expression {
 	std::string name;

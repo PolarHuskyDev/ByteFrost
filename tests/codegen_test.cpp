@@ -568,7 +568,9 @@ TEST(CodeGenStructs, StructInit) {
 		}
 	)");
 	assertIRContains(ir, "%Point = type { i64, i64 }");
-	assertIRContains(ir, "alloca %Point");
+	// Structs are heap-allocated: variable slot is a ptr, struct data is malloc'd.
+	assertIRContains(ir, "alloca ptr");
+	assertIRContains(ir, "call ptr @malloc");
 	assertIRContains(ir, "getelementptr inbounds %Point");
 }
 
@@ -1009,6 +1011,71 @@ TEST(CodeGenEmitObj, EmitsValidObjectFile) {
 
 	std::remove(objPath.c_str());
 }
+
+// =====================
+// Optimization level
+// =====================
+
+TEST(CodeGenOptLevel, O0AndO2ProduceDifferentObjectFiles) {
+	// A function with multiple intermediate values that a real optimizer will
+	// constant-fold completely.  At O2, compute(3,4) folds to ret i64 180.
+	// At O0, all allocas and arithmetic are materialised verbatim.
+	const std::string src = R"(
+		compute(a: int, b: int): int {
+			x: int = a * b;
+			y: int = x + a;
+			z: int = y * x;
+			return z;
+		}
+		main(): int { return compute(3, 4); }
+	)";
+
+	auto compileToObj = [&](CodeGen::OptLevel lvl, const std::string& path) {
+		Lexer lexer(src);
+		auto tokens = lexer.tokenize();
+		Parser parser(tokens);
+		Program program = parser.parseProgram();
+		CodeGen codegen;
+		codegen.setOptLevel(lvl);
+		codegen.emitObjectFile(program, path);
+	};
+
+	const std::string o0Path = "/tmp/bytefrost_opt_o0.o";
+	const std::string o2Path = "/tmp/bytefrost_opt_o2.o";
+	compileToObj(CodeGen::OptLevel::O0, o0Path);
+	compileToObj(CodeGen::OptLevel::O2, o2Path);
+
+	auto fileSize = [](const std::string& path) -> std::streamsize {
+		std::ifstream f(path, std::ios::binary | std::ios::ate);
+		if (!f.is_open()) return std::streamsize(-1);
+		return static_cast<std::streamsize>(f.tellg());
+	};
+
+	auto checkELF = [](const std::string& path) {
+		std::ifstream f(path, std::ios::binary);
+		ASSERT_TRUE(f.is_open()) << "Object file not created: " << path;
+		char magic[4];
+		f.read(magic, 4);
+		EXPECT_EQ(magic[0], 0x7f);
+		EXPECT_EQ(magic[1], 'E');
+		EXPECT_EQ(magic[2], 'L');
+		EXPECT_EQ(magic[3], 'F');
+	};
+
+	checkELF(o0Path);
+	checkELF(o2Path);
+
+	auto sz0 = fileSize(o0Path);
+	auto sz2 = fileSize(o2Path);
+	EXPECT_GT(sz0, 0) << "O0 object file is empty";
+	EXPECT_GT(sz2, 0) << "O2 object file is empty";
+	EXPECT_NE(sz0, sz2)
+		<< "O0 and O2 should produce different object files (PassBuilder must have run)";
+
+	std::remove(o0Path.c_str());
+	std::remove(o2Path.c_str());
+}
+
 // =====================
 // Math stdlib functions
 // =====================
