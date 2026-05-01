@@ -31,6 +31,10 @@ class CodeGen {
    public:
 	CodeGen();
 
+	/// Optimization level — mirrors Rust/Cargo opt-level (0/1/2/3/"s"/"z").
+	enum class OptLevel { O0, O1, O2, O3, Os, Oz };
+	void setOptLevel(OptLevel level) { optLevel_ = level; }
+
 	/// Generate LLVM IR for the entire program. Returns the IR as a string.
 	std::string generate(const Program& program);
 
@@ -50,6 +54,7 @@ class CodeGen {
 	std::unique_ptr<llvm::Module> module;
 	std::unique_ptr<llvm::IRBuilder<>> builder;
 	std::unique_ptr<llvm::TargetMachine> targetMachine;
+	OptLevel optLevel_ = OptLevel::O0;
 
 	// Scope management: stack of variable maps.
 	struct Scope {

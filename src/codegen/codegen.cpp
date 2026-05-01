@@ -1,8 +1,10 @@
 #include "codegen/codegen.h"
 
+#include <llvm/Analysis/AliasAnalysis.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/MC/TargetRegistry.h>
+#include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
@@ -55,12 +57,27 @@ void CodeGen::initializeTarget() {
 		throw CodeGenError("Failed to lookup target: " + error);
 	}
 
+	// Mirrors rustc's codegen_backend mapping:
+	//   O0 → None, O1 → Less, O2 → Default, O3 → Aggressive
+	//   Os / Oz → Default  (size opts are PassBuilder-level, not machine-level)
+	llvm::CodeGenOptLevel cgOptLevel;
+	switch (optLevel_) {
+		case OptLevel::O1: cgOptLevel = llvm::CodeGenOptLevel::Less;       break;
+		case OptLevel::O2: cgOptLevel = llvm::CodeGenOptLevel::Default;    break;
+		case OptLevel::O3: cgOptLevel = llvm::CodeGenOptLevel::Aggressive; break;
+		case OptLevel::Os: cgOptLevel = llvm::CodeGenOptLevel::Default;    break;
+		case OptLevel::Oz: cgOptLevel = llvm::CodeGenOptLevel::Default;    break;
+		default:           cgOptLevel = llvm::CodeGenOptLevel::None;       break;
+	}
+
 	targetMachine.reset(target->createTargetMachine(
 		triple,
 		"generic",
 		"",
 		llvm::TargetOptions{},
-		llvm::Reloc::PIC_));
+		llvm::Reloc::PIC_,
+		std::nullopt,
+		cgOptLevel));
 
 	if (!targetMachine) {
 		throw CodeGenError("Failed to create target machine for: " + triple);
@@ -153,13 +170,45 @@ void CodeGen::emitObjectFile(const Program& program, const std::string& outputPa
 		throw CodeGenError("Could not open output file: " + ec.message());
 	}
 
-	llvm::legacy::PassManager pass;
-	if (targetMachine->addPassesToEmitFile(pass, dest, nullptr,
+	// --- IR optimization via PassBuilder ---
+	llvm::LoopAnalysisManager     LAM;
+	llvm::FunctionAnalysisManager FAM;
+	llvm::CGSCCAnalysisManager    CGAM;
+	llvm::ModuleAnalysisManager   MAM;
+
+	llvm::PassBuilder PB(targetMachine.get());
+	PB.registerModuleAnalyses(MAM);
+	PB.registerCGSCCAnalyses(CGAM);
+	PB.registerFunctionAnalyses(FAM);
+	PB.registerLoopAnalyses(LAM);
+	PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+	// Mirrors Rust opt-level: 0→O0, 1→O1, 2→O2, 3→O3, "s"→Os, "z"→Oz
+	llvm::OptimizationLevel pbLevel = llvm::OptimizationLevel::O0;
+	switch (optLevel_) {
+		case OptLevel::O1: pbLevel = llvm::OptimizationLevel::O1; break;
+		case OptLevel::O2: pbLevel = llvm::OptimizationLevel::O2; break;
+		case OptLevel::O3: pbLevel = llvm::OptimizationLevel::O3; break;
+		case OptLevel::Os: pbLevel = llvm::OptimizationLevel::Os; break;
+		case OptLevel::Oz: pbLevel = llvm::OptimizationLevel::Oz; break;
+		default: break;
+	}
+
+	llvm::ModulePassManager MPM;
+	if (pbLevel != llvm::OptimizationLevel::O0) {
+		MPM = PB.buildPerModuleDefaultPipeline(pbLevel);
+	}
+	MPM.run(*module, MAM);
+
+	// --- Machine-code emission via legacy PM (still required for addPassesToEmitFile) ---
+	// As of LLVM 19, addPassesToEmitFile lives on the legacy PM; both PMs are needed.
+	llvm::legacy::PassManager codegenPass;
+	if (targetMachine->addPassesToEmitFile(codegenPass, dest, nullptr,
 										   llvm::CodeGenFileType::ObjectFile)) {
 		throw CodeGenError("Target machine cannot emit object files");
 	}
 
-	pass.run(*module);
+	codegenPass.run(*module);
 	dest.flush();
 }
 

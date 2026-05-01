@@ -13,6 +13,7 @@ int main(int argc, char* argv[]) {
 	bool emitIR = false;
 	bool emitObj = false;
 	std::string outputFile;
+	CodeGen::OptLevel optLevel = CodeGen::OptLevel::O0;
 
 	for (int i = 1; i < argc; i++) {
 		if (std::strcmp(argv[i], "--emit-ir") == 0) {
@@ -21,6 +22,19 @@ int main(int argc, char* argv[]) {
 			emitObj = true;
 		} else if (std::strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
 			outputFile = argv[++i];
+		} else if (std::strncmp(argv[i], "-O", 2) == 0) {
+			std::string_view lvl = argv[i] + 2;
+			if      (lvl == "0") optLevel = CodeGen::OptLevel::O0;
+			else if (lvl == "1") optLevel = CodeGen::OptLevel::O1;
+			else if (lvl == "2") optLevel = CodeGen::OptLevel::O2;
+			else if (lvl == "3") optLevel = CodeGen::OptLevel::O3;
+			else if (lvl == "s") optLevel = CodeGen::OptLevel::Os;
+			else if (lvl == "z") optLevel = CodeGen::OptLevel::Oz;
+			else {
+				std::cerr << "Unknown optimization level: " << argv[i]
+				          << "  (valid: -O0 -O1 -O2 -O3 -Os -Oz)\n";
+				return 1;
+			}
 		} else {
 			filename = argv[i];
 		}
@@ -45,7 +59,7 @@ int main(int argc, char* argv[]) {
 		Program program = parser.parseProgram();
 
 		if (emitIR) {
-			// Code generation
+			// Code generation (IR output ignores opt level — IR is pre-optimization)
 			CodeGen codegen;
 			std::string ir = codegen.generate(program);
 
@@ -62,11 +76,13 @@ int main(int argc, char* argv[]) {
 		} else if (emitObj) {
 			// Emit native object file
 			CodeGen codegen;
+			codegen.setOptLevel(optLevel);
 			std::string objPath = outputFile.empty() ? "output.o" : outputFile;
 			codegen.emitObjectFile(program, objPath);
 		} else {
 			// Default: compile + link → executable.
 			CodeGen codegen;
+			codegen.setOptLevel(optLevel);
 			std::string tmpObj = outputFile + ".tmp.o";
 			if (outputFile.empty()) {
 				outputFile = "a.out";
