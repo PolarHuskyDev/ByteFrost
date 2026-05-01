@@ -24,6 +24,7 @@
 #include <parser/parser.h>
 #include <tokenizer/lexer.h>
 #include <tokenizer/tokens.h>
+#include <version.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -557,7 +558,8 @@ static void printHelp() {
 				 "  orca init <name>           Create <name>/ and scaffold a project inside it\n"
 				 "\n"
 				 "GENERAL:\n"
-				 "  -h, --help                 Show this message\n";
+				 "  -h, --help                 Show this message\n"
+				 "  -V, --version              Print version and exit\n";
 }
 
 /// Write a file, creating any missing parent directories.
@@ -716,6 +718,9 @@ int main(int argc, char* argv[]) {
 		} else if (first == "help" || first == "--help" || first == "-h") {
 			printHelp();
 			return 0;
+		} else if (first == "--version" || first == "-V") {
+			std::cout << "orca " << BF_VERSION << "\n";
+			return 0;
 		}
 		// If first arg looks like a flag (starts with -), treat as build options.
 	}
@@ -750,6 +755,9 @@ int main(int argc, char* argv[]) {
 			releaseMode = false;
 		} else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
 			printHelp();
+			return 0;
+		} else if (std::strcmp(argv[i], "--version") == 0 || std::strcmp(argv[i], "-V") == 0) {
+			std::cout << "orca " << BF_VERSION << "\n";
 			return 0;
 		} else {
 			std::cerr << "[orca] Unknown option: " << argv[i] << "\n";

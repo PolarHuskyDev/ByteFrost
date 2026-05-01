@@ -7,6 +7,7 @@
 #include "parser/parser.h"
 #include "tokenizer/lexer.h"
 #include "tokenizer/tokens.h"
+#include "version.h"
 
 int main(int argc, char* argv[]) {
 	const char* filename = "tests/fib.bf";
@@ -16,7 +17,10 @@ int main(int argc, char* argv[]) {
 	CodeGen::OptLevel optLevel = CodeGen::OptLevel::O0;
 
 	for (int i = 1; i < argc; i++) {
-		if (std::strcmp(argv[i], "--emit-ir") == 0) {
+		if (std::strcmp(argv[i], "--version") == 0 || std::strcmp(argv[i], "-V") == 0) {
+			std::cout << "byte_frost " << BF_VERSION << "\n";
+			return 0;
+		} else if (std::strcmp(argv[i], "--emit-ir") == 0) {
 			emitIR = true;
 		} else if (std::strcmp(argv[i], "--emit-obj") == 0) {
 			emitObj = true;
