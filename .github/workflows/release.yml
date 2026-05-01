@@ -26,7 +26,7 @@ jobs:
     name: Build (${{ matrix.name }})
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0   # needed so git describe works
 
@@ -37,7 +37,7 @@ jobs:
           echo "BF_VERSION=${TAG#v}" >> "$GITHUB_ENV"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -45,7 +45,7 @@ jobs:
         run: pip install "conan>=2"
 
       - name: Cache Conan packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.conan2/p
           key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py') }}
@@ -60,7 +60,8 @@ jobs:
           conan install . \
             --output-folder=build/Release \
             --build=missing \
-            --settings build_type=Release
+            --settings build_type=Release \
+            --settings compiler.cppstd=17
 
       # ── Linux ────────────────────────────────────────────────────────────────
       - name: Install system tools (Linux)
@@ -161,7 +162,7 @@ jobs:
     name: Publish GitHub Release
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Extract version from tag
         run: echo "BF_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
