@@ -78,9 +78,7 @@ jobs:
       - name: Configure (Linux)
         if: runner.os == 'Linux'
         run: |
-          cmake -S . -B build/Release \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE=build/Release/generators/conan_toolchain.cmake \
+          cmake --preset conan-release \
             -DBF_VERSION="$BF_VERSION" \
             -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
 
@@ -115,10 +113,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          cmake -S . -B build/Release \
-            -G "Ninja" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE=build/Release/generators/conan_toolchain.cmake \
+          cmake --preset conan-release \
             "-DBF_VERSION=$BF_VERSION" \
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
 

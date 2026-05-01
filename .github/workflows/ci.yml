@@ -61,22 +61,10 @@ jobs:
             --settings build_type=Release \
             --settings compiler.cppstd=17
 
-      - name: Configure (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          cmake -S . -B build/Release \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE=build/Release/generators/conan_toolchain.cmake \
-            -DBF_VERSION=0.0.0-dev
-
-      - name: Configure (Windows)
-        if: runner.os == 'Windows'
+      - name: Configure
         shell: bash
         run: |
-          cmake -S . -B build/Release \
-            -G "Ninja" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE=build/Release/generators/conan_toolchain.cmake \
+          cmake --preset conan-release \
             -DBF_VERSION=0.0.0-dev \
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
 
