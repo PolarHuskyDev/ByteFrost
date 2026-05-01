@@ -6,21 +6,22 @@
 
 class LinkerError : public std::runtime_error {
    public:
-	LinkerError(const std::string& msg) : std::runtime_error(msg) {}
+	LinkerError(const std::string& msg) : std::runtime_error(msg) {
+	}
 };
 
 class Linker {
    public:
 	struct Config {
-		std::string objectFile;                  // single object (kept for compatibility)
-		std::vector<std::string> objectFiles;    // all object files to link (preferred when non-empty)
+		std::string objectFile;				   // single object (kept for compatibility)
+		std::vector<std::string> objectFiles;  // all object files to link (preferred when non-empty)
 		std::string outputFile = "a.out";
-		std::vector<std::string> extraLibs;      // additional -l flags
-		std::vector<std::string> extraLibPaths;  // additional -L flags
+		std::vector<std::string> extraLibs;		 // additional -l flags
+		std::vector<std::string> extraLibPaths;	 // additional -L flags
 		// Target-specific settings; leave empty for auto-detection
-		std::string targetTriple;      // e.g. "x86_64-linux-gnu"
-		std::string linkerEmulation;   // e.g. "elf_x86_64"; auto-detected if empty
-		std::string dynamicLinker;     // path to ld-linux-*.so; auto-detected if empty
+		std::string targetTriple;				  // e.g. "x86_64-linux-gnu"
+		std::string linkerEmulation;			  // e.g. "elf_x86_64"; auto-detected if empty
+		std::string dynamicLinker;				  // path to ld-linux-*.so; auto-detected if empty
 		std::vector<std::string> crtSearchPaths;  // extra dirs to search for CRT objects
 	};
 
@@ -29,8 +30,7 @@ class Linker {
 
    private:
 	static std::string findLinker();
-	static std::string findCRTObject(const std::string& name,
-	                                  const std::vector<std::string>& extraSearchPaths);
+	static std::string findCRTObject(const std::string& name, const std::vector<std::string>& extraSearchPaths);
 	static std::string findDynamicLinker(const std::string& linkerEmulation);
 	static std::string detectLinkerEmulation();
 	static std::vector<std::string> detectGCCLibPaths();

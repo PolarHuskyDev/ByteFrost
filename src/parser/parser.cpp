@@ -12,13 +12,15 @@ const Token& Parser::current() const {
 }
 
 const Token& Parser::peek() const {
-	if (pos + 1 < tokens.size()) return tokens[pos + 1];
+	if (pos + 1 < tokens.size())
+		return tokens[pos + 1];
 	return tokens.back();
 }
 
 const Token& Parser::advance() {
 	const Token& tok = tokens[pos];
-	if (pos < tokens.size() - 1) pos++;
+	if (pos < tokens.size() - 1)
+		pos++;
 	return tok;
 }
 
@@ -50,12 +52,9 @@ bool Parser::isAtEnd() const {
 }
 
 bool Parser::isAssignOp(TokenType type) const {
-	return type == TokenType::ASSIGN_TOKEN ||
-		   type == TokenType::PLUS_ASSIGN_TOKEN ||
-		   type == TokenType::MINUS_ASSIGN_TOKEN ||
-		   type == TokenType::MULTIPLY_ASSIGN_TOKEN ||
-		   type == TokenType::DIVIDE_ASSIGN_TOKEN ||
-		   type == TokenType::MODULO_ASSIGN_TOKEN;
+	return type == TokenType::ASSIGN_TOKEN || type == TokenType::PLUS_ASSIGN_TOKEN
+		   || type == TokenType::MINUS_ASSIGN_TOKEN || type == TokenType::MULTIPLY_ASSIGN_TOKEN
+		   || type == TokenType::DIVIDE_ASSIGN_TOKEN || type == TokenType::MODULO_ASSIGN_TOKEN;
 }
 
 // ==========================
@@ -68,8 +67,8 @@ Program Parser::parseProgram() {
 	while (!isAtEnd()) {
 		if (check(TokenType::IMPORT_TOKEN)) {
 			program.imports.push_back(parseImportDecl());
-		} else if (check(TokenType::STRUCT_TOKEN) ||
-		           (check(TokenType::EXPORT_TOKEN) && peek().type == TokenType::STRUCT_TOKEN)) {
+		} else if (check(TokenType::STRUCT_TOKEN)
+				   || (check(TokenType::EXPORT_TOKEN) && peek().type == TokenType::STRUCT_TOKEN)) {
 			program.structs.push_back(parseStructDecl());
 		} else {
 			program.functions.push_back(parseFunctionDecl());
@@ -101,9 +100,7 @@ std::unique_ptr<ImportDecl> Parser::parseImportDecl() {
 	// Read first identifier
 	const Token& first = expect(TokenType::IDENTIFIER_TOKEN, "Expected identifier after 'import'");
 
-	if (check(TokenType::FROM_TOKEN) ||
-	    check(TokenType::COMMA_TOKEN) ||
-	    (check(TokenType::AS_TOKEN))) {
+	if (check(TokenType::FROM_TOKEN) || check(TokenType::COMMA_TOKEN) || (check(TokenType::AS_TOKEN))) {
 		// Selective import: first token is an item name (not a module path segment)
 		ImportItem item;
 		item.name = first.value;
@@ -255,9 +252,8 @@ std::unique_ptr<TypeNode> Parser::parseType() {
 			typeNode->typeParams.push_back(parseType());
 		}
 		expect(TokenType::GREATER_TOKEN, "Expected '>' after type parameter");
-	} else if (check(TokenType::INT_TOKEN) || check(TokenType::FLOAT_TOKEN) ||
-			   check(TokenType::BOOL_TOKEN) || check(TokenType::CHAR_TOKEN) ||
-			   check(TokenType::STRING_TOKEN) || check(TokenType::VOID_TOKEN)) {
+	} else if (check(TokenType::INT_TOKEN) || check(TokenType::FLOAT_TOKEN) || check(TokenType::BOOL_TOKEN)
+			   || check(TokenType::CHAR_TOKEN) || check(TokenType::STRING_TOKEN) || check(TokenType::VOID_TOKEN)) {
 		typeNode->name = current().value;
 		advance();
 	} else if (check(TokenType::IDENTIFIER_TOKEN)) {
@@ -287,11 +283,16 @@ Block Parser::parseBlock() {
 }
 
 StmtPtr Parser::parseStatement() {
-	if (check(TokenType::IF_TOKEN)) return parseIfStmt();
-	if (check(TokenType::WHILE_TOKEN)) return parseWhileStmt();
-	if (check(TokenType::FOR_TOKEN)) return parseForStmt();
-	if (check(TokenType::MATCH_TOKEN)) return parseMatchStmt();
-	if (check(TokenType::RETURN_TOKEN)) return parseReturnStmt();
+	if (check(TokenType::IF_TOKEN))
+		return parseIfStmt();
+	if (check(TokenType::WHILE_TOKEN))
+		return parseWhileStmt();
+	if (check(TokenType::FOR_TOKEN))
+		return parseForStmt();
+	if (check(TokenType::MATCH_TOKEN))
+		return parseMatchStmt();
+	if (check(TokenType::RETURN_TOKEN))
+		return parseReturnStmt();
 	if (check(TokenType::BREAK_TOKEN)) {
 		auto stmt = std::make_unique<BreakStmt>();
 		stmt->line = current().line;
@@ -326,7 +327,7 @@ StmtPtr Parser::parseVarDeclOrExprStmt() {
 			decl->line = current().line;
 			decl->column = current().column;
 			decl->name = current().value;
-			advance(); // consume identifier
+			advance();	// consume identifier
 
 			if (match(TokenType::WALRUS_TOKEN)) {
 				// x := expr;
@@ -468,7 +469,7 @@ StmtPtr Parser::parseForStmt() {
 		stmt->init = parseVarDeclOrExprStmt();
 		// parseVarDeclOrExprStmt already consumed the semicolon
 	} else {
-		advance(); // consume ;
+		advance();	// consume ;
 	}
 
 	// Condition
@@ -527,7 +528,7 @@ std::unique_ptr<ReturnStmt> Parser::parseReturnStmt() {
 	auto stmt = std::make_unique<ReturnStmt>();
 	stmt->line = current().line;
 	stmt->column = current().column;
-	advance(); // consume 'return'
+	advance();	// consume 'return'
 
 	if (!check(TokenType::SEMICOLON_TOKEN)) {
 		stmt->value = parseExpression();
@@ -624,8 +625,8 @@ ExprPtr Parser::parseEquality() {
 
 ExprPtr Parser::parseRelational() {
 	auto left = parseShift();
-	while (check(TokenType::LESS_TOKEN) || check(TokenType::GREATER_TOKEN) ||
-		   check(TokenType::LESS_EQUAL_TOKEN) || check(TokenType::GREATER_EQUAL_TOKEN)) {
+	while (check(TokenType::LESS_TOKEN) || check(TokenType::GREATER_TOKEN) || check(TokenType::LESS_EQUAL_TOKEN)
+		   || check(TokenType::GREATER_EQUAL_TOKEN)) {
 		std::string op = current().value;
 		advance();
 		auto right = parseShift();
@@ -897,12 +898,10 @@ ExprPtr Parser::parseInterpolatedString() {
 	}
 
 	// Expect END
-	const Token& end = expect(TokenType::INTERP_STRING_END_TOKEN,
-							  "Expected end of interpolated string");
+	const Token& end = expect(TokenType::INTERP_STRING_END_TOKEN, "Expected end of interpolated string");
 	fragments.push_back(end.value);
 
-	auto expr = std::make_unique<InterpolatedStringExpr>(
-		std::move(fragments), std::move(expressions));
+	auto expr = std::make_unique<InterpolatedStringExpr>(std::move(fragments), std::move(expressions));
 	expr->line = startLine;
 	expr->column = startCol;
 	return expr;

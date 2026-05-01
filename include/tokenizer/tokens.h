@@ -16,9 +16,9 @@ enum class TokenType {
 	IDENTIFIER_TOKEN,
 
 	// Interpolated string tokens
-	INTERP_STRING_START_TOKEN,  // "text{ — opening fragment before first interpolation
-	INTERP_STRING_MID_TOKEN,    // }text{ — fragment between interpolations
-	INTERP_STRING_END_TOKEN,    // }text" — closing fragment after last interpolation
+	INTERP_STRING_START_TOKEN,	// "text{ — opening fragment before first interpolation
+	INTERP_STRING_MID_TOKEN,	// }text{ — fragment between interpolations
+	INTERP_STRING_END_TOKEN,	// }text" — closing fragment after last interpolation
 
 	// Keywords
 	IF_TOKEN,
@@ -52,61 +52,61 @@ enum class TokenType {
 	OVERRIDDEN_TOKEN,
 
 	// Arithmetic operators
-	PLUS_TOKEN,       // +
-	MINUS_TOKEN,      // -
-	MULTIPLY_TOKEN,   // *
-	DIVIDE_TOKEN,     // /
-	MODULO_TOKEN,     // %
+	PLUS_TOKEN,		 // +
+	MINUS_TOKEN,	 // -
+	MULTIPLY_TOKEN,	 // *
+	DIVIDE_TOKEN,	 // /
+	MODULO_TOKEN,	 // %
 
 	// Assignment operators
-	ASSIGN_TOKEN,           // =
-	WALRUS_TOKEN,           // :=
-	PLUS_ASSIGN_TOKEN,      // +=
-	MINUS_ASSIGN_TOKEN,     // -=
-	MULTIPLY_ASSIGN_TOKEN,  // *=
-	DIVIDE_ASSIGN_TOKEN,    // /=
-	MODULO_ASSIGN_TOKEN,    // %=
+	ASSIGN_TOKEN,			// =
+	WALRUS_TOKEN,			// :=
+	PLUS_ASSIGN_TOKEN,		// +=
+	MINUS_ASSIGN_TOKEN,		// -=
+	MULTIPLY_ASSIGN_TOKEN,	// *=
+	DIVIDE_ASSIGN_TOKEN,	// /=
+	MODULO_ASSIGN_TOKEN,	// %=
 
 	// Comparison operators
-	EQUAL_TOKEN,          // ==
-	NOT_EQUAL_TOKEN,      // !=
-	LESS_TOKEN,           // <
-	LESS_EQUAL_TOKEN,     // <=
-	GREATER_TOKEN,        // >
+	EQUAL_TOKEN,		  // ==
+	NOT_EQUAL_TOKEN,	  // !=
+	LESS_TOKEN,			  // <
+	LESS_EQUAL_TOKEN,	  // <=
+	GREATER_TOKEN,		  // >
 	GREATER_EQUAL_TOKEN,  // >=
 
 	// Logical operators
-	AND_TOKEN,  // &&
-	OR_TOKEN,   // ||
-	NOT_TOKEN,  // !
-	XOR_TOKEN,  // ^^
+	AND_TOKEN,	// &&
+	OR_TOKEN,	// ||
+	NOT_TOKEN,	// !
+	XOR_TOKEN,	// ^^
 
 	// Bitwise operators
-	BIT_AND_TOKEN,      // &
-	BIT_OR_TOKEN,       // |
-	BIT_XOR_TOKEN,      // ^
-	BIT_NOT_TOKEN,      // ~
-	LEFT_SHIFT_TOKEN,   // <<
-	RIGHT_SHIFT_TOKEN,  // >>
+	BIT_AND_TOKEN,		// &
+	BIT_OR_TOKEN,		// |
+	BIT_XOR_TOKEN,		// ^
+	BIT_NOT_TOKEN,		// ~
+	LEFT_SHIFT_TOKEN,	// <<
+	RIGHT_SHIFT_TOKEN,	// >>
 
 	// Increment/Decrement
 	INCREMENT_TOKEN,  // ++
 	DECREMENT_TOKEN,  // --
 
 	// Delimiters
-	LEFT_PAREN_TOKEN,    // (
-	RIGHT_PAREN_TOKEN,   // )
-	LEFT_BRACE_TOKEN,    // {
-	RIGHT_BRACE_TOKEN,   // }
-	LEFT_BRACKET_TOKEN,  // [
-	RIGHT_BRACKET_TOKEN, // ]
-	SEMICOLON_TOKEN,     // ;
-	COLON_TOKEN,         // :
-	COMMA_TOKEN,         // ,
-	DOT_TOKEN,           // .
-	ARROW_TOKEN,         // =>
-	UNDERSCORE_TOKEN,    // _ (wildcard in match)
-	DOTDOT_TOKEN,        // .. (range)
+	LEFT_PAREN_TOKEN,	  // (
+	RIGHT_PAREN_TOKEN,	  // )
+	LEFT_BRACE_TOKEN,	  // {
+	RIGHT_BRACE_TOKEN,	  // }
+	LEFT_BRACKET_TOKEN,	  // [
+	RIGHT_BRACKET_TOKEN,  // ]
+	SEMICOLON_TOKEN,	  // ;
+	COLON_TOKEN,		  // :
+	COMMA_TOKEN,		  // ,
+	DOT_TOKEN,			  // .
+	ARROW_TOKEN,		  // =>
+	UNDERSCORE_TOKEN,	  // _ (wildcard in match)
+	DOTDOT_TOKEN,		  // .. (range)
 };
 
 const char* tokenTypeToString(TokenType type);

@@ -1,6 +1,7 @@
+#include "tokenizer/lexer.h"
+
 #include <gtest/gtest.h>
 
-#include "tokenizer/lexer.h"
 #include "tokenizer/tokens.h"
 
 // Helper: tokenize source and return all tokens (including EOF)
@@ -11,8 +12,8 @@ static std::vector<Token> lex(const std::string& source) {
 
 // Convenience: check a token's type and value
 static void expectToken(const Token& t, TokenType type, const std::string& value) {
-	EXPECT_EQ(t.type, type) << "Expected " << tokenTypeToString(type) << " but got "
-							<< tokenTypeToString(t.type) << " (value: \"" << t.value << "\")";
+	EXPECT_EQ(t.type, type) << "Expected " << tokenTypeToString(type) << " but got " << tokenTypeToString(t.type)
+							<< " (value: \"" << t.value << "\")";
 	EXPECT_EQ(t.value, value);
 }
 
@@ -111,7 +112,9 @@ TEST(LexerBasic, ComparisonOperators) {
 // ============================================================
 
 TEST(LexerKeywords, AllKeywords) {
-	auto tokens = lex("if else elseif for while return break continue match struct true false this in void int float bool char string array slice map");
+	auto tokens =
+		lex("if else elseif for while return break continue match struct true false this in void int float bool char "
+			"string array slice map");
 	ASSERT_EQ(tokens.size(), 24u);
 	expectToken(tokens[0], TokenType::IF_TOKEN, "if");
 	expectToken(tokens[1], TokenType::ELSE_TOKEN, "else");
@@ -525,18 +528,18 @@ TEST(LexerModuleKeywords, ImportSelectiveStatement) {
 	auto tokens = lex("import Foo, Bar as B from math.trig;");
 	// import Foo , Bar as B from math . trig ; EOF
 	ASSERT_EQ(tokens.size(), 12u);
-	expectToken(tokens[0],  TokenType::IMPORT_TOKEN,     "import");
-	expectToken(tokens[1],  TokenType::IDENTIFIER_TOKEN, "Foo");
-	expectToken(tokens[2],  TokenType::COMMA_TOKEN,      ",");
-	expectToken(tokens[3],  TokenType::IDENTIFIER_TOKEN, "Bar");
-	expectToken(tokens[4],  TokenType::AS_TOKEN,         "as");
-	expectToken(tokens[5],  TokenType::IDENTIFIER_TOKEN, "B");
-	expectToken(tokens[6],  TokenType::FROM_TOKEN,       "from");
-	expectToken(tokens[7],  TokenType::IDENTIFIER_TOKEN, "math");
-	expectToken(tokens[8],  TokenType::DOT_TOKEN,        ".");
-	expectToken(tokens[9],  TokenType::IDENTIFIER_TOKEN, "trig");
-	expectToken(tokens[10], TokenType::SEMICOLON_TOKEN,  ";");
-	expectToken(tokens[11], TokenType::EOF_TOKEN,        "");
+	expectToken(tokens[0], TokenType::IMPORT_TOKEN, "import");
+	expectToken(tokens[1], TokenType::IDENTIFIER_TOKEN, "Foo");
+	expectToken(tokens[2], TokenType::COMMA_TOKEN, ",");
+	expectToken(tokens[3], TokenType::IDENTIFIER_TOKEN, "Bar");
+	expectToken(tokens[4], TokenType::AS_TOKEN, "as");
+	expectToken(tokens[5], TokenType::IDENTIFIER_TOKEN, "B");
+	expectToken(tokens[6], TokenType::FROM_TOKEN, "from");
+	expectToken(tokens[7], TokenType::IDENTIFIER_TOKEN, "math");
+	expectToken(tokens[8], TokenType::DOT_TOKEN, ".");
+	expectToken(tokens[9], TokenType::IDENTIFIER_TOKEN, "trig");
+	expectToken(tokens[10], TokenType::SEMICOLON_TOKEN, ";");
+	expectToken(tokens[11], TokenType::EOF_TOKEN, "");
 }
 
 TEST(LexerModuleKeywords, ImportNamespaceStatement) {
@@ -544,25 +547,25 @@ TEST(LexerModuleKeywords, ImportNamespaceStatement) {
 	auto tokens = lex("import math.utils;");
 	// import math . utils ; EOF
 	ASSERT_EQ(tokens.size(), 6u);
-	expectToken(tokens[0], TokenType::IMPORT_TOKEN,     "import");
+	expectToken(tokens[0], TokenType::IMPORT_TOKEN, "import");
 	expectToken(tokens[1], TokenType::IDENTIFIER_TOKEN, "math");
-	expectToken(tokens[2], TokenType::DOT_TOKEN,        ".");
+	expectToken(tokens[2], TokenType::DOT_TOKEN, ".");
 	expectToken(tokens[3], TokenType::IDENTIFIER_TOKEN, "utils");
-	expectToken(tokens[4], TokenType::SEMICOLON_TOKEN,  ";");
-	expectToken(tokens[5], TokenType::EOF_TOKEN,        "");
+	expectToken(tokens[4], TokenType::SEMICOLON_TOKEN, ";");
+	expectToken(tokens[5], TokenType::EOF_TOKEN, "");
 }
 
 TEST(LexerModuleKeywords, ExportFunctionDecl) {
 	// export foo(): int { return 0; }
 	auto tokens = lex("export foo(): int { return 0; }");
-	expectToken(tokens[0], TokenType::EXPORT_TOKEN,     "export");
+	expectToken(tokens[0], TokenType::EXPORT_TOKEN, "export");
 	expectToken(tokens[1], TokenType::IDENTIFIER_TOKEN, "foo");
 }
 
 TEST(LexerModuleKeywords, ExportOverriddenDecl) {
 	// export overridden floor(x: float): float { return x; }
 	auto tokens = lex("export overridden floor(x: float): float { return x; }");
-	expectToken(tokens[0], TokenType::EXPORT_TOKEN,     "export");
+	expectToken(tokens[0], TokenType::EXPORT_TOKEN, "export");
 	expectToken(tokens[1], TokenType::OVERRIDDEN_TOKEN, "overridden");
 	expectToken(tokens[2], TokenType::IDENTIFIER_TOKEN, "floor");
 }
@@ -582,4 +585,3 @@ TEST(LexerModuleKeywords, KeywordsNotConfusedWithIdentifiers) {
 			<< "Token " << i << " (\"" << tokens[i].value << "\") should be IDENTIFIER";
 	}
 }
-	

@@ -20,10 +20,21 @@
 // ==========================
 
 const std::set<std::string>& CodeGen::stdlibMathNames() {
-	static const std::set<std::string> names = {
-		"sin", "cos", "tan", "sqrt", "pow", "floor", "ceil", "round",
-		"abs", "log", "log2", "log10", "exp", "min", "max"
-	};
+	static const std::set<std::string> names = {"sin",
+												"cos",
+												"tan",
+												"sqrt",
+												"pow",
+												"floor",
+												"ceil",
+												"round",
+												"abs",
+												"log",
+												"log2",
+												"log10",
+												"exp",
+												"min",
+												"max"};
 	return names;
 }
 
@@ -62,22 +73,28 @@ void CodeGen::initializeTarget() {
 	//   Os / Oz → Default  (size opts are PassBuilder-level, not machine-level)
 	llvm::CodeGenOptLevel cgOptLevel;
 	switch (optLevel_) {
-		case OptLevel::O1: cgOptLevel = llvm::CodeGenOptLevel::Less;       break;
-		case OptLevel::O2: cgOptLevel = llvm::CodeGenOptLevel::Default;    break;
-		case OptLevel::O3: cgOptLevel = llvm::CodeGenOptLevel::Aggressive; break;
-		case OptLevel::Os: cgOptLevel = llvm::CodeGenOptLevel::Default;    break;
-		case OptLevel::Oz: cgOptLevel = llvm::CodeGenOptLevel::Default;    break;
-		default:           cgOptLevel = llvm::CodeGenOptLevel::None;       break;
+		case OptLevel::O1:
+			cgOptLevel = llvm::CodeGenOptLevel::Less;
+			break;
+		case OptLevel::O2:
+			cgOptLevel = llvm::CodeGenOptLevel::Default;
+			break;
+		case OptLevel::O3:
+			cgOptLevel = llvm::CodeGenOptLevel::Aggressive;
+			break;
+		case OptLevel::Os:
+			cgOptLevel = llvm::CodeGenOptLevel::Default;
+			break;
+		case OptLevel::Oz:
+			cgOptLevel = llvm::CodeGenOptLevel::Default;
+			break;
+		default:
+			cgOptLevel = llvm::CodeGenOptLevel::None;
+			break;
 	}
 
 	targetMachine.reset(target->createTargetMachine(
-		triple,
-		"generic",
-		"",
-		llvm::TargetOptions{},
-		llvm::Reloc::PIC_,
-		std::nullopt,
-		cgOptLevel));
+		triple, "generic", "", llvm::TargetOptions{}, llvm::Reloc::PIC_, std::nullopt, cgOptLevel));
 
 	if (!targetMachine) {
 		throw CodeGenError("Failed to create target machine for: " + triple);
@@ -171,10 +188,10 @@ void CodeGen::emitObjectFile(const Program& program, const std::string& outputPa
 	}
 
 	// --- IR optimization via PassBuilder ---
-	llvm::LoopAnalysisManager     LAM;
+	llvm::LoopAnalysisManager LAM;
 	llvm::FunctionAnalysisManager FAM;
-	llvm::CGSCCAnalysisManager    CGAM;
-	llvm::ModuleAnalysisManager   MAM;
+	llvm::CGSCCAnalysisManager CGAM;
+	llvm::ModuleAnalysisManager MAM;
 
 	llvm::PassBuilder PB(targetMachine.get());
 	PB.registerModuleAnalyses(MAM);
@@ -186,12 +203,23 @@ void CodeGen::emitObjectFile(const Program& program, const std::string& outputPa
 	// Mirrors Rust opt-level: 0→O0, 1→O1, 2→O2, 3→O3, "s"→Os, "z"→Oz
 	llvm::OptimizationLevel pbLevel = llvm::OptimizationLevel::O0;
 	switch (optLevel_) {
-		case OptLevel::O1: pbLevel = llvm::OptimizationLevel::O1; break;
-		case OptLevel::O2: pbLevel = llvm::OptimizationLevel::O2; break;
-		case OptLevel::O3: pbLevel = llvm::OptimizationLevel::O3; break;
-		case OptLevel::Os: pbLevel = llvm::OptimizationLevel::Os; break;
-		case OptLevel::Oz: pbLevel = llvm::OptimizationLevel::Oz; break;
-		default: break;
+		case OptLevel::O1:
+			pbLevel = llvm::OptimizationLevel::O1;
+			break;
+		case OptLevel::O2:
+			pbLevel = llvm::OptimizationLevel::O2;
+			break;
+		case OptLevel::O3:
+			pbLevel = llvm::OptimizationLevel::O3;
+			break;
+		case OptLevel::Os:
+			pbLevel = llvm::OptimizationLevel::Os;
+			break;
+		case OptLevel::Oz:
+			pbLevel = llvm::OptimizationLevel::Oz;
+			break;
+		default:
+			break;
 	}
 
 	llvm::ModulePassManager MPM;
@@ -203,8 +231,7 @@ void CodeGen::emitObjectFile(const Program& program, const std::string& outputPa
 	// --- Machine-code emission via legacy PM (still required for addPassesToEmitFile) ---
 	// As of LLVM 19, addPassesToEmitFile lives on the legacy PM; both PMs are needed.
 	llvm::legacy::PassManager codegenPass;
-	if (targetMachine->addPassesToEmitFile(codegenPass, dest, nullptr,
-										   llvm::CodeGenFileType::ObjectFile)) {
+	if (targetMachine->addPassesToEmitFile(codegenPass, dest, nullptr, llvm::CodeGenFileType::ObjectFile)) {
 		throw CodeGenError("Target machine cannot emit object files");
 	}
 
@@ -219,7 +246,8 @@ void CodeGen::emitObjectFile(const Program& program, const std::string& outputPa
 
 void CodeGen::declareExternFunction(const FunctionDecl& fn) {
 	// If the function is already known (declared or defined), skip.
-	if (module->getFunction(fn.name)) return;
+	if (module->getFunction(fn.name))
+		return;
 
 	std::vector<llvm::Type*> paramTypes;
 	for (const auto& param : fn.params) {
@@ -325,15 +353,12 @@ void CodeGen::emitRefDecrement(llvm::Value* structAlloca, bool isMap) {
 
 	builder->SetInsertPoint(freeBB);
 	if (isMap) {
-		auto* keysPtr = builder->CreateLoad(ptrType,
-			builder->CreateStructGEP(structType, structAlloca, 0), "keys");
+		auto* keysPtr = builder->CreateLoad(ptrType, builder->CreateStructGEP(structType, structAlloca, 0), "keys");
 		builder->CreateCall(freeFunc, {keysPtr});
-		auto* valsPtr = builder->CreateLoad(ptrType,
-			builder->CreateStructGEP(structType, structAlloca, 1), "vals");
+		auto* valsPtr = builder->CreateLoad(ptrType, builder->CreateStructGEP(structType, structAlloca, 1), "vals");
 		builder->CreateCall(freeFunc, {valsPtr});
 	} else {
-		auto* dataPtr = builder->CreateLoad(ptrType,
-			builder->CreateStructGEP(structType, structAlloca, 0), "data");
+		auto* dataPtr = builder->CreateLoad(ptrType, builder->CreateStructGEP(structType, structAlloca, 0), "data");
 		builder->CreateCall(freeFunc, {dataPtr});
 	}
 	builder->CreateCall(freeFunc, {rcPtr});
@@ -352,8 +377,10 @@ void CodeGen::emitScopeCleanup() {
 	}
 }
 
-void CodeGen::declareVariable(const std::string& name, llvm::AllocaInst* alloca,
-							  llvm::Type* type, const std::string& bfTypeName) {
+void CodeGen::declareVariable(const std::string& name,
+							  llvm::AllocaInst* alloca,
+							  llvm::Type* type,
+							  const std::string& bfTypeName) {
 	scopes.back().variables[name] = alloca;
 	scopes.back().varTypes[name] = type;
 	if (!bfTypeName.empty()) {
@@ -368,7 +395,8 @@ void CodeGen::declareVariable(const std::string& name, llvm::AllocaInst* alloca,
 llvm::AllocaInst* CodeGen::lookupVariable(const std::string& name) {
 	for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
 		auto found = it->variables.find(name);
-		if (found != it->variables.end()) return found->second;
+		if (found != it->variables.end())
+			return found->second;
 	}
 	throw CodeGenError("Undefined variable: " + name);
 }
@@ -376,7 +404,8 @@ llvm::AllocaInst* CodeGen::lookupVariable(const std::string& name) {
 llvm::Type* CodeGen::lookupVarType(const std::string& name) {
 	for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
 		auto found = it->varTypes.find(name);
-		if (found != it->varTypes.end()) return found->second;
+		if (found != it->varTypes.end())
+			return found->second;
 	}
 	throw CodeGenError("Undefined variable type: " + name);
 }
@@ -384,14 +413,13 @@ llvm::Type* CodeGen::lookupVarType(const std::string& name) {
 std::string CodeGen::lookupVarBFTypeName(const std::string& name) {
 	for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
 		auto found = it->varBFTypeNames.find(name);
-		if (found != it->varBFTypeNames.end()) return found->second;
+		if (found != it->varBFTypeNames.end())
+			return found->second;
 	}
-	return "";  // no BF type name tracked
+	return "";	// no BF type name tracked
 }
 
-llvm::AllocaInst* CodeGen::createEntryBlockAlloca(llvm::Function* fn,
-												  const std::string& name,
-												  llvm::Type* type) {
+llvm::AllocaInst* CodeGen::createEntryBlockAlloca(llvm::Function* fn, const std::string& name, llvm::Type* type) {
 	llvm::IRBuilder<> tmpB(&fn->getEntryBlock(), fn->getEntryBlock().begin());
 	return tmpB.CreateAlloca(type, nullptr, name);
 }
@@ -401,12 +429,18 @@ llvm::AllocaInst* CodeGen::createEntryBlockAlloca(llvm::Function* fn,
 // ==========================
 
 llvm::Type* CodeGen::getLLVMType(const TypeNode& type) {
-	if (type.name == "int") return llvm::Type::getInt64Ty(*context);
-	if (type.name == "float") return llvm::Type::getDoubleTy(*context);
-	if (type.name == "bool") return llvm::Type::getInt1Ty(*context);
-	if (type.name == "char") return llvm::Type::getInt8Ty(*context);
-	if (type.name == "string") return llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(*context));
-	if (type.name == "void") return llvm::Type::getVoidTy(*context);
+	if (type.name == "int")
+		return llvm::Type::getInt64Ty(*context);
+	if (type.name == "float")
+		return llvm::Type::getDoubleTy(*context);
+	if (type.name == "bool")
+		return llvm::Type::getInt1Ty(*context);
+	if (type.name == "char")
+		return llvm::Type::getInt8Ty(*context);
+	if (type.name == "string")
+		return llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(*context));
+	if (type.name == "void")
+		return llvm::Type::getVoidTy(*context);
 
 	// User-defined struct type
 	auto structIt = structRegistry.find(type.name);
@@ -437,10 +471,14 @@ bool CodeGen::isFloatType(llvm::Type* type) const {
 }
 
 std::string CodeGen::getFormatSpecifier(llvm::Type* type) const {
-	if (type->isPointerTy()) return "%s";
-	if (type->isDoubleTy() || type->isFloatTy()) return "%g";
-	if (type->isIntegerTy(1)) return "%s";  // bool — handled specially
-	if (type->isIntegerTy(8)) return "%c";
+	if (type->isPointerTy())
+		return "%s";
+	if (type->isDoubleTy() || type->isFloatTy())
+		return "%g";
+	if (type->isIntegerTy(1))
+		return "%s";  // bool — handled specially
+	if (type->isIntegerTy(8))
+		return "%c";
 	return "%ld";  // i64 or other int
 }
 
@@ -469,8 +507,10 @@ void CodeGen::registerStructTypes(const Program& program) {
 				std::string cycle;
 				bool inCycle = false;
 				for (const auto& p : path) {
-					if (p == name) inCycle = true;
-					if (inCycle) cycle += p + " -> ";
+					if (p == name)
+						inCycle = true;
+					if (inCycle)
+						cycle += p + " -> ";
 				}
 				cycle += name;
 				throw CodeGenError(
@@ -478,7 +518,8 @@ void CodeGen::registerStructTypes(const Program& program) {
 					". Structs are value types and cannot form cycles "
 					"(infinite size). Future: use Box<T> for heap-allocated indirection.");
 			}
-			if (visited.count(name)) return;
+			if (visited.count(name))
+				return;
 			visited.insert(name);
 			inStack.insert(name);
 			path.push_back(name);
@@ -536,14 +577,15 @@ void CodeGen::generateStructMethods(const Program& program) {
 		auto& info = structRegistry.at(sd->name);
 
 		for (const auto& member : sd->members) {
-			if (member.kind != StructMember::METHOD) continue;
+			if (member.kind != StructMember::METHOD)
+				continue;
 			const auto& fn = *member.method;
 			std::string mangledName = sd->name + "." + fn.name;
 
 			// Build parameter types: first is pointer to struct (this), then regular params.
 			std::vector<llvm::Type*> paramTypes;
 			auto* ptrType = llvm::PointerType::getUnqual(*context);
-			paramTypes.push_back(ptrType);  // this pointer
+			paramTypes.push_back(ptrType);	// this pointer
 
 			for (const auto& param : fn.params) {
 				paramTypes.push_back(getLLVMType(*param.type));
@@ -552,8 +594,8 @@ void CodeGen::generateStructMethods(const Program& program) {
 			llvm::Type* retType = getLLVMType(*fn.returnType);
 			auto funcType = llvm::FunctionType::get(retType, paramTypes, false);
 
-			llvm::Function* function = llvm::Function::Create(
-				funcType, llvm::Function::ExternalLinkage, mangledName, module.get());
+			llvm::Function* function =
+				llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, mangledName, module.get());
 
 			// Set parameter names.
 			auto argIt = function->arg_begin();
@@ -586,7 +628,8 @@ void CodeGen::generateStructMethods(const Program& program) {
 			// Generate body.
 			for (const auto& stmt : fn.body.statements) {
 				generateStatement(*stmt);
-				if (builder->GetInsertBlock()->getTerminator()) break;
+				if (builder->GetInsertBlock()->getTerminator())
+					break;
 			}
 
 			if (!builder->GetInsertBlock()->getTerminator()) {
@@ -602,8 +645,7 @@ void CodeGen::generateStructMethods(const Program& program) {
 	}
 }
 
-void CodeGen::generateStructInit(const StructInitExpr& expr, llvm::Value* basePtr,
-								 const std::string& structName) {
+void CodeGen::generateStructInit(const StructInitExpr& expr, llvm::Value* basePtr, const std::string& structName) {
 	auto& info = structRegistry.at(structName);
 
 	for (const auto& [fieldName, fieldExpr] : expr.fields) {
@@ -813,17 +855,13 @@ llvm::Value* CodeGen::generateEmptyMap(llvm::Type* keyType, llvm::Type* valType)
 	uint64_t keySize = module->getDataLayout().getTypeAllocSize(keyType);
 	uint64_t valSize = module->getDataLayout().getTypeAllocSize(valType);
 
-	llvm::Value* keyBuf = builder->CreateCall(mallocFunc,
-		{llvm::ConstantInt::get(i64, initCap * keySize)}, "map.keys");
-	llvm::Value* valBuf = builder->CreateCall(mallocFunc,
-		{llvm::ConstantInt::get(i64, initCap * valSize)}, "map.vals");
+	llvm::Value* keyBuf = builder->CreateCall(mallocFunc, {llvm::ConstantInt::get(i64, initCap * keySize)}, "map.keys");
+	llvm::Value* valBuf = builder->CreateCall(mallocFunc, {llvm::ConstantInt::get(i64, initCap * valSize)}, "map.vals");
 
 	builder->CreateStore(keyBuf, builder->CreateStructGEP(mapType, alloca, 0, "keys.ptr"));
 	builder->CreateStore(valBuf, builder->CreateStructGEP(mapType, alloca, 1, "vals.ptr"));
-	builder->CreateStore(llvm::ConstantInt::get(i64, 0),
-						 builder->CreateStructGEP(mapType, alloca, 2, "len.ptr"));
-	builder->CreateStore(llvm::ConstantInt::get(i64, initCap),
-						 builder->CreateStructGEP(mapType, alloca, 3, "cap.ptr"));
+	builder->CreateStore(llvm::ConstantInt::get(i64, 0), builder->CreateStructGEP(mapType, alloca, 2, "len.ptr"));
+	builder->CreateStore(llvm::ConstantInt::get(i64, initCap), builder->CreateStructGEP(mapType, alloca, 3, "cap.ptr"));
 
 	// Allocate and init refcount to 1.
 	llvm::Value* rcBuf = builder->CreateCall(mallocFunc, {llvm::ConstantInt::get(i64, 8)}, "map.rc");
@@ -833,8 +871,8 @@ llvm::Value* CodeGen::generateEmptyMap(llvm::Type* keyType, llvm::Type* valType)
 	return alloca;
 }
 
-void CodeGen::generateMapSet(llvm::AllocaInst* mapAlloca, llvm::Type* keyType, llvm::Type* valType,
-							 llvm::Value* key, llvm::Value* val) {
+void CodeGen::generateMapSet(
+	llvm::AllocaInst* mapAlloca, llvm::Type* keyType, llvm::Type* valType, llvm::Value* key, llvm::Value* val) {
 	auto* fn = builder->GetInsertBlock()->getParent();
 	auto* mapType = getOrCreateMapType(keyType, valType);
 	auto* i64 = llvm::Type::getInt64Ty(*context);
@@ -843,14 +881,10 @@ void CodeGen::generateMapSet(llvm::AllocaInst* mapAlloca, llvm::Type* keyType, l
 	uint64_t keySize = module->getDataLayout().getTypeAllocSize(keyType);
 	uint64_t valSize = module->getDataLayout().getTypeAllocSize(valType);
 
-	llvm::Value* keys = builder->CreateLoad(ptrType,
-		builder->CreateStructGEP(mapType, mapAlloca, 0), "keys");
-	llvm::Value* vals = builder->CreateLoad(ptrType,
-		builder->CreateStructGEP(mapType, mapAlloca, 1), "vals");
-	llvm::Value* len = builder->CreateLoad(i64,
-		builder->CreateStructGEP(mapType, mapAlloca, 2), "len");
-	llvm::Value* cap = builder->CreateLoad(i64,
-		builder->CreateStructGEP(mapType, mapAlloca, 3), "cap");
+	llvm::Value* keys = builder->CreateLoad(ptrType, builder->CreateStructGEP(mapType, mapAlloca, 0), "keys");
+	llvm::Value* vals = builder->CreateLoad(ptrType, builder->CreateStructGEP(mapType, mapAlloca, 1), "vals");
+	llvm::Value* len = builder->CreateLoad(i64, builder->CreateStructGEP(mapType, mapAlloca, 2), "len");
+	llvm::Value* cap = builder->CreateLoad(i64, builder->CreateStructGEP(mapType, mapAlloca, 3), "cap");
 
 	// Linear search loop: for (i = 0; i < len; i++) if (keys[i] == key) { vals[i] = val; return; }
 	auto* loopBB = llvm::BasicBlock::Create(*context, "map.search", fn);
@@ -914,10 +948,10 @@ void CodeGen::generateMapSet(llvm::AllocaInst* mapAlloca, llvm::Type* keyType, l
 	// Grow
 	builder->SetInsertPoint(growBB);
 	llvm::Value* newCap = builder->CreateMul(cap, llvm::ConstantInt::get(i64, 2), "newcap");
-	llvm::Value* newKeyBuf = builder->CreateCall(reallocFunc,
-		{keys, builder->CreateMul(newCap, llvm::ConstantInt::get(i64, keySize))}, "newkeys");
-	llvm::Value* newValBuf = builder->CreateCall(reallocFunc,
-		{vals, builder->CreateMul(newCap, llvm::ConstantInt::get(i64, valSize))}, "newvals");
+	llvm::Value* newKeyBuf = builder->CreateCall(
+		reallocFunc, {keys, builder->CreateMul(newCap, llvm::ConstantInt::get(i64, keySize))}, "newkeys");
+	llvm::Value* newValBuf = builder->CreateCall(
+		reallocFunc, {vals, builder->CreateMul(newCap, llvm::ConstantInt::get(i64, valSize))}, "newvals");
 	builder->CreateStore(newKeyBuf, builder->CreateStructGEP(mapType, mapAlloca, 0));
 	builder->CreateStore(newValBuf, builder->CreateStructGEP(mapType, mapAlloca, 1));
 	builder->CreateStore(newCap, builder->CreateStructGEP(mapType, mapAlloca, 3));
@@ -943,19 +977,16 @@ void CodeGen::generateMapSet(llvm::AllocaInst* mapAlloca, llvm::Type* keyType, l
 	builder->SetInsertPoint(doneBB);
 }
 
-llvm::Value* CodeGen::generateMapGet(llvm::AllocaInst* mapAlloca, llvm::Type* keyType,
-									 llvm::Type* valType, llvm::Value* key) {
+llvm::Value*
+CodeGen::generateMapGet(llvm::AllocaInst* mapAlloca, llvm::Type* keyType, llvm::Type* valType, llvm::Value* key) {
 	auto* fn = builder->GetInsertBlock()->getParent();
 	auto* mapType = getOrCreateMapType(keyType, valType);
 	auto* i64 = llvm::Type::getInt64Ty(*context);
 	auto* ptrType = llvm::PointerType::getUnqual(*context);
 
-	llvm::Value* keys = builder->CreateLoad(ptrType,
-		builder->CreateStructGEP(mapType, mapAlloca, 0), "keys");
-	llvm::Value* vals = builder->CreateLoad(ptrType,
-		builder->CreateStructGEP(mapType, mapAlloca, 1), "vals");
-	llvm::Value* len = builder->CreateLoad(i64,
-		builder->CreateStructGEP(mapType, mapAlloca, 2), "len");
+	llvm::Value* keys = builder->CreateLoad(ptrType, builder->CreateStructGEP(mapType, mapAlloca, 0), "keys");
+	llvm::Value* vals = builder->CreateLoad(ptrType, builder->CreateStructGEP(mapType, mapAlloca, 1), "vals");
+	llvm::Value* len = builder->CreateLoad(i64, builder->CreateStructGEP(mapType, mapAlloca, 2), "len");
 
 	// Linear search
 	auto* loopBB = llvm::BasicBlock::Create(*context, "mapget.loop", fn);
@@ -1030,8 +1061,7 @@ void CodeGen::generateFunction(const FunctionDecl& fn) {
 	llvm::Type* retType = getLLVMType(*fn.returnType);
 	auto funcType = llvm::FunctionType::get(retType, paramTypes, false);
 
-	llvm::Function* function = llvm::Function::Create(
-		funcType, llvm::Function::ExternalLinkage, fn.name, module.get());
+	llvm::Function* function = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, fn.name, module.get());
 
 	// Set parameter names.
 	size_t idx = 0;
@@ -1060,7 +1090,8 @@ void CodeGen::generateFunction(const FunctionDecl& fn) {
 	for (const auto& stmt : fn.body.statements) {
 		generateStatement(*stmt);
 		// If the current block is already terminated (return/break/continue), stop.
-		if (builder->GetInsertBlock()->getTerminator()) break;
+		if (builder->GetInsertBlock()->getTerminator())
+			break;
 	}
 
 	// If the function is void and doesn't end with a return, add one.
@@ -1102,14 +1133,16 @@ void CodeGen::generateStatement(const Statement& stmt) {
 	} else if (auto* s = dynamic_cast<const ExprStmt*>(&stmt)) {
 		generateExprStmt(*s);
 	} else if (dynamic_cast<const BreakStmt*>(&stmt)) {
-		if (breakTargets.empty()) throw CodeGenError("break outside of loop");
+		if (breakTargets.empty())
+			throw CodeGenError("break outside of loop");
 		builder->CreateBr(breakTargets.back());
 		// Create an unreachable block for any code after break.
 		auto* fn = builder->GetInsertBlock()->getParent();
 		auto* deadBB = llvm::BasicBlock::Create(*context, "after.break", fn);
 		builder->SetInsertPoint(deadBB);
 	} else if (dynamic_cast<const ContinueStmt*>(&stmt)) {
-		if (continueTargets.empty()) throw CodeGenError("continue outside of loop");
+		if (continueTargets.empty())
+			throw CodeGenError("continue outside of loop");
 		builder->CreateBr(continueTargets.back());
 		auto* fn = builder->GetInsertBlock()->getParent();
 		auto* deadBB = llvm::BasicBlock::Create(*context, "after.continue", fn);
@@ -1186,8 +1219,8 @@ void CodeGen::generateVarDecl(const VarDeclStmt& stmt) {
 					// Heap-allocate and initialize the struct.
 					auto* i64 = llvm::Type::getInt64Ty(*context);
 					uint64_t structSize = module->getDataLayout().getTypeAllocSize(varType);
-					llvm::Value* heapPtr = builder->CreateCall(mallocFunc,
-						{llvm::ConstantInt::get(i64, structSize)}, stmt.name + ".heap");
+					llvm::Value* heapPtr =
+						builder->CreateCall(mallocFunc, {llvm::ConstantInt::get(i64, structSize)}, stmt.name + ".heap");
 					generateStructInit(*structInit, heapPtr, bfTypeName);
 					builder->CreateStore(heapPtr, alloca);
 				} else {
@@ -1197,8 +1230,7 @@ void CodeGen::generateVarDecl(const VarDeclStmt& stmt) {
 				}
 			} else {
 				// No initializer: default to null pointer.
-				builder->CreateStore(llvm::ConstantPointerNull::get(
-					llvm::cast<llvm::PointerType>(ptrType)), alloca);
+				builder->CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ptrType)), alloca);
 			}
 			declareVariable(stmt.name, alloca, ptrType, bfTypeName);
 			return;
@@ -1212,8 +1244,7 @@ void CodeGen::generateVarDecl(const VarDeclStmt& stmt) {
 					// Extract element type from the BF type.
 					llvm::Type* elemType = getLLVMType(*stmt.type->typeParams[0]);
 					// Generate the literal into a temporary alloca, then copy.
-					auto* tmpAlloca = static_cast<llvm::AllocaInst*>(
-						generateArrayLiteral(*arrLit, elemType));
+					auto* tmpAlloca = static_cast<llvm::AllocaInst*>(generateArrayLiteral(*arrLit, elemType));
 					// Copy the struct fields.
 					llvm::Value* tmpVal = builder->CreateLoad(varType, tmpAlloca, "arr.tmp");
 					builder->CreateStore(tmpVal, alloca);
@@ -1313,7 +1344,8 @@ void CodeGen::generateAssign(const AssignStmt& stmt) {
 				ptrElemType = getLLVMType(tn);
 			}
 		}
-		if (!ptrElemType) ptrElemType = rhs->getType();
+		if (!ptrElemType)
+			ptrElemType = rhs->getType();
 	} else {
 		ptrElemType = rhs->getType();
 	}
@@ -1326,18 +1358,29 @@ void CodeGen::generateAssign(const AssignStmt& stmt) {
 		llvm::Value* result = nullptr;
 
 		if (isFloatType(ptrElemType)) {
-			if (stmt.op == "+=") result = builder->CreateFAdd(lhs, rhs, "fadd");
-			else if (stmt.op == "-=") result = builder->CreateFSub(lhs, rhs, "fsub");
-			else if (stmt.op == "*=") result = builder->CreateFMul(lhs, rhs, "fmul");
-			else if (stmt.op == "/=") result = builder->CreateFDiv(lhs, rhs, "fdiv");
-			else throw CodeGenError("Unsupported float compound assign: " + stmt.op);
+			if (stmt.op == "+=")
+				result = builder->CreateFAdd(lhs, rhs, "fadd");
+			else if (stmt.op == "-=")
+				result = builder->CreateFSub(lhs, rhs, "fsub");
+			else if (stmt.op == "*=")
+				result = builder->CreateFMul(lhs, rhs, "fmul");
+			else if (stmt.op == "/=")
+				result = builder->CreateFDiv(lhs, rhs, "fdiv");
+			else
+				throw CodeGenError("Unsupported float compound assign: " + stmt.op);
 		} else {
-			if (stmt.op == "+=") result = builder->CreateAdd(lhs, rhs, "add");
-			else if (stmt.op == "-=") result = builder->CreateSub(lhs, rhs, "sub");
-			else if (stmt.op == "*=") result = builder->CreateMul(lhs, rhs, "mul");
-			else if (stmt.op == "/=") result = builder->CreateSDiv(lhs, rhs, "div");
-			else if (stmt.op == "%=") result = builder->CreateSRem(lhs, rhs, "rem");
-			else throw CodeGenError("Unsupported compound assign: " + stmt.op);
+			if (stmt.op == "+=")
+				result = builder->CreateAdd(lhs, rhs, "add");
+			else if (stmt.op == "-=")
+				result = builder->CreateSub(lhs, rhs, "sub");
+			else if (stmt.op == "*=")
+				result = builder->CreateMul(lhs, rhs, "mul");
+			else if (stmt.op == "/=")
+				result = builder->CreateSDiv(lhs, rhs, "div");
+			else if (stmt.op == "%=")
+				result = builder->CreateSRem(lhs, rhs, "rem");
+			else
+				throw CodeGenError("Unsupported compound assign: " + stmt.op);
 		}
 		builder->CreateStore(result, ptr);
 	}
@@ -1363,8 +1406,8 @@ llvm::Value* CodeGen::generateLValue(const Expression& expr) {
 				auto* arrType = getOrCreateArrayType(elemType);
 				auto* ptrType = llvm::PointerType::getUnqual(*context);
 
-				llvm::Value* data = builder->CreateLoad(ptrType,
-					builder->CreateStructGEP(arrType, arrAlloca, 0), "data");
+				llvm::Value* data =
+					builder->CreateLoad(ptrType, builder->CreateStructGEP(arrType, arrAlloca, 0), "data");
 				llvm::Value* idx = generateExpression(*indexExpr->index);
 				return builder->CreateGEP(elemType, data, idx, "elem.ptr");
 			}
@@ -1383,8 +1426,7 @@ llvm::Value* CodeGen::generateLValue(const Expression& expr) {
 		if (fieldIt == info.fieldIndices.end()) {
 			throw CodeGenError("Unknown field: " + memberExpr->member);
 		}
-		return builder->CreateStructGEP(info.llvmType, basePtr, fieldIt->second,
-										memberExpr->member + ".ptr");
+		return builder->CreateStructGEP(info.llvmType, basePtr, fieldIt->second, memberExpr->member + ".ptr");
 	}
 	throw CodeGenError("Invalid assignment target");
 }
@@ -1437,7 +1479,8 @@ void CodeGen::generateIf(const IfStmt& stmt) {
 	builder->SetInsertPoint(thenBB);
 	for (const auto& s : stmt.thenBlock.statements) {
 		generateStatement(*s);
-		if (builder->GetInsertBlock()->getTerminator()) break;
+		if (builder->GetInsertBlock()->getTerminator())
+			break;
 	}
 	if (!builder->GetInsertBlock()->getTerminator()) {
 		builder->CreateBr(mergeBB);
@@ -1464,7 +1507,8 @@ void CodeGen::generateIf(const IfStmt& stmt) {
 		builder->SetInsertPoint(elseIfBodyBBs[i]);
 		for (const auto& s : stmt.elseIfBlocks[i].second.statements) {
 			generateStatement(*s);
-			if (builder->GetInsertBlock()->getTerminator()) break;
+			if (builder->GetInsertBlock()->getTerminator())
+				break;
 		}
 		if (!builder->GetInsertBlock()->getTerminator()) {
 			builder->CreateBr(mergeBB);
@@ -1476,7 +1520,8 @@ void CodeGen::generateIf(const IfStmt& stmt) {
 		builder->SetInsertPoint(elseBB);
 		for (const auto& s : stmt.elseBlock->statements) {
 			generateStatement(*s);
-			if (builder->GetInsertBlock()->getTerminator()) break;
+			if (builder->GetInsertBlock()->getTerminator())
+				break;
 		}
 		if (!builder->GetInsertBlock()->getTerminator()) {
 			builder->CreateBr(mergeBB);
@@ -1513,7 +1558,8 @@ void CodeGen::generateWhile(const WhileStmt& stmt) {
 	builder->SetInsertPoint(bodyBB);
 	for (const auto& s : stmt.body.statements) {
 		generateStatement(*s);
-		if (builder->GetInsertBlock()->getTerminator()) break;
+		if (builder->GetInsertBlock()->getTerminator())
+			break;
 	}
 	if (!builder->GetInsertBlock()->getTerminator()) {
 		builder->CreateBr(condBB);
@@ -1555,7 +1601,7 @@ void CodeGen::generateFor(const ForStmt& stmt) {
 		}
 		builder->CreateCondBr(cond, bodyBB, endBB);
 	} else {
-		builder->CreateBr(bodyBB);  // infinite loop if no condition
+		builder->CreateBr(bodyBB);	// infinite loop if no condition
 	}
 
 	// Body.
@@ -1565,7 +1611,8 @@ void CodeGen::generateFor(const ForStmt& stmt) {
 	builder->SetInsertPoint(bodyBB);
 	for (const auto& s : stmt.body.statements) {
 		generateStatement(*s);
-		if (builder->GetInsertBlock()->getTerminator()) break;
+		if (builder->GetInsertBlock()->getTerminator())
+			break;
 	}
 	if (!builder->GetInsertBlock()->getTerminator()) {
 		builder->CreateBr(updateBB);
@@ -1623,7 +1670,8 @@ void CodeGen::generateForIn(const ForInStmt& stmt) {
 	builder->SetInsertPoint(bodyBB);
 	for (const auto& s : stmt.body.statements) {
 		generateStatement(*s);
-		if (builder->GetInsertBlock()->getTerminator()) break;
+		if (builder->GetInsertBlock()->getTerminator())
+			break;
 	}
 	if (!builder->GetInsertBlock()->getTerminator()) {
 		builder->CreateBr(updateBB);
@@ -1676,7 +1724,8 @@ void CodeGen::generateMatch(const MatchStmt& stmt) {
 	// Generate conditions as a chain of if-else.
 	for (size_t i = 0; i < cases.size(); i++) {
 		const auto& mc = *cases[i].mc;
-		if (mc.isDefault) continue;
+		if (mc.isDefault)
+			continue;
 
 		// Compute the OR of all pattern matches.
 		llvm::Value* matchCond = nullptr;
@@ -1686,8 +1735,7 @@ void CodeGen::generateMatch(const MatchStmt& stmt) {
 
 			if (isString) {
 				// strcmp(subject, pattern) == 0
-				llvm::Value* cmpResult = builder->CreateCall(
-					strcmpFunc, {subject, patVal}, "strcmp");
+				llvm::Value* cmpResult = builder->CreateCall(strcmpFunc, {subject, patVal}, "strcmp");
 				cmp = builder->CreateICmpEQ(
 					cmpResult, llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0), "streq");
 			} else if (subject->getType()->isDoubleTy()) {
@@ -1730,7 +1778,8 @@ void CodeGen::generateMatch(const MatchStmt& stmt) {
 		builder->SetInsertPoint(c.bodyBB);
 		for (const auto& s : c.mc->body.statements) {
 			generateStatement(*s);
-			if (builder->GetInsertBlock()->getTerminator()) break;
+			if (builder->GetInsertBlock()->getTerminator())
+				break;
 		}
 		if (!builder->GetInsertBlock()->getTerminator()) {
 			builder->CreateBr(mergeBB);
@@ -1797,17 +1846,30 @@ llvm::Value* CodeGen::generateExpression(const Expression& expr) {
 		return builder->CreateGlobalStringPtr(e->value, "str");
 	}
 	if (auto* e = dynamic_cast<const CharLiteralExpr*>(&expr)) {
-		if (e->value.empty()) return llvm::ConstantInt::get(llvm::Type::getInt8Ty(*context), 0);
+		if (e->value.empty())
+			return llvm::ConstantInt::get(llvm::Type::getInt8Ty(*context), 0);
 		char c = e->value[0];
 		// Handle escape sequences stored as single chars.
 		if (e->value.size() > 1 && e->value[0] == '\\') {
 			switch (e->value[1]) {
-				case 'n': c = '\n'; break;
-				case 't': c = '\t'; break;
-				case '\\': c = '\\'; break;
-				case '\'': c = '\''; break;
-				case '0': c = '\0'; break;
-				default: c = e->value[1]; break;
+				case 'n':
+					c = '\n';
+					break;
+				case 't':
+					c = '\t';
+					break;
+				case '\\':
+					c = '\\';
+					break;
+				case '\'':
+					c = '\'';
+					break;
+				case '0':
+					c = '\0';
+					break;
+				default:
+					c = e->value[1];
+					break;
 			}
 		}
 		return llvm::ConstantInt::get(llvm::Type::getInt8Ty(*context), c);
@@ -1878,8 +1940,7 @@ llvm::Value* CodeGen::generateIndex(const IndexExpr& expr) {
 			auto* arrType = getOrCreateArrayType(elemType);
 			auto* ptrType = llvm::PointerType::getUnqual(*context);
 
-			llvm::Value* data = builder->CreateLoad(ptrType,
-				builder->CreateStructGEP(arrType, arrAlloca, 0), "data");
+			llvm::Value* data = builder->CreateLoad(ptrType, builder->CreateStructGEP(arrType, arrAlloca, 0), "data");
 			llvm::Value* idx = generateExpression(*expr.index);
 			llvm::Value* elemPtr = builder->CreateGEP(elemType, data, idx, "elem.ptr");
 			return builder->CreateLoad(elemType, elemPtr, "elem");
@@ -1938,8 +1999,10 @@ llvm::Value* CodeGen::generateInterpolatedString(const InterpolatedStringExpr& e
 	for (size_t i = 0; i < expr.expressions.size(); i++) {
 		// Escape % in fragment for printf.
 		for (char c : expr.fragments[i]) {
-			if (c == '%') formatStr += "%%";
-			else formatStr += c;
+			if (c == '%')
+				formatStr += "%%";
+			else
+				formatStr += c;
 		}
 
 		llvm::Value* val = generateExpression(*expr.expressions[i]);
@@ -1964,8 +2027,10 @@ llvm::Value* CodeGen::generateInterpolatedString(const InterpolatedStringExpr& e
 
 	// Add the final fragment.
 	for (char c : expr.fragments.back()) {
-		if (c == '%') formatStr += "%%";
-		else formatStr += c;
+		if (c == '%')
+			formatStr += "%%";
+		else
+			formatStr += c;
 	}
 
 	// Use snprintf to build the string: first get length, then allocate and fill.
@@ -1975,10 +2040,7 @@ llvm::Value* CodeGen::generateInterpolatedString(const InterpolatedStringExpr& e
 
 	// snprintf(NULL, 0, fmt, ...) to get required length.
 	std::vector<llvm::Value*> sizeArgs = {
-		llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8Ptr)),
-		llvm::ConstantInt::get(i64, 0),
-		fmtStr
-	};
+		llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8Ptr)), llvm::ConstantInt::get(i64, 0), fmtStr};
 	sizeArgs.insert(sizeArgs.end(), args.begin(), args.end());
 	llvm::Value* len = builder->CreateCall(snprintfFunc, sizeArgs, "interp.len");
 
@@ -2019,24 +2081,19 @@ llvm::Value* CodeGen::generateBinary(const BinaryExpr& expr) {
 
 	// Arithmetic.
 	if (expr.op == "+") {
-		return isFloat ? builder->CreateFAdd(lhs, rhs, "fadd")
-					   : builder->CreateAdd(lhs, rhs, "add");
+		return isFloat ? builder->CreateFAdd(lhs, rhs, "fadd") : builder->CreateAdd(lhs, rhs, "add");
 	}
 	if (expr.op == "-") {
-		return isFloat ? builder->CreateFSub(lhs, rhs, "fsub")
-					   : builder->CreateSub(lhs, rhs, "sub");
+		return isFloat ? builder->CreateFSub(lhs, rhs, "fsub") : builder->CreateSub(lhs, rhs, "sub");
 	}
 	if (expr.op == "*") {
-		return isFloat ? builder->CreateFMul(lhs, rhs, "fmul")
-					   : builder->CreateMul(lhs, rhs, "mul");
+		return isFloat ? builder->CreateFMul(lhs, rhs, "fmul") : builder->CreateMul(lhs, rhs, "mul");
 	}
 	if (expr.op == "/") {
-		return isFloat ? builder->CreateFDiv(lhs, rhs, "fdiv")
-					   : builder->CreateSDiv(lhs, rhs, "div");
+		return isFloat ? builder->CreateFDiv(lhs, rhs, "fdiv") : builder->CreateSDiv(lhs, rhs, "div");
 	}
 	if (expr.op == "%") {
-		return isFloat ? builder->CreateFRem(lhs, rhs, "frem")
-					   : builder->CreateSRem(lhs, rhs, "rem");
+		return isFloat ? builder->CreateFRem(lhs, rhs, "frem") : builder->CreateSRem(lhs, rhs, "rem");
 	}
 
 	// Comparison operators.
@@ -2045,32 +2102,26 @@ llvm::Value* CodeGen::generateBinary(const BinaryExpr& expr) {
 			llvm::Value* cmp = builder->CreateCall(strcmpFunc, {lhs, rhs}, "strcmp");
 			return builder->CreateICmpEQ(cmp, llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0), "streq");
 		}
-		return isFloat ? builder->CreateFCmpOEQ(lhs, rhs, "feq")
-					   : builder->CreateICmpEQ(lhs, rhs, "eq");
+		return isFloat ? builder->CreateFCmpOEQ(lhs, rhs, "feq") : builder->CreateICmpEQ(lhs, rhs, "eq");
 	}
 	if (expr.op == "!=") {
 		if (isStr) {
 			llvm::Value* cmp = builder->CreateCall(strcmpFunc, {lhs, rhs}, "strcmp");
 			return builder->CreateICmpNE(cmp, llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0), "strne");
 		}
-		return isFloat ? builder->CreateFCmpONE(lhs, rhs, "fne")
-					   : builder->CreateICmpNE(lhs, rhs, "ne");
+		return isFloat ? builder->CreateFCmpONE(lhs, rhs, "fne") : builder->CreateICmpNE(lhs, rhs, "ne");
 	}
 	if (expr.op == "<") {
-		return isFloat ? builder->CreateFCmpOLT(lhs, rhs, "flt")
-					   : builder->CreateICmpSLT(lhs, rhs, "lt");
+		return isFloat ? builder->CreateFCmpOLT(lhs, rhs, "flt") : builder->CreateICmpSLT(lhs, rhs, "lt");
 	}
 	if (expr.op == ">") {
-		return isFloat ? builder->CreateFCmpOGT(lhs, rhs, "fgt")
-					   : builder->CreateICmpSGT(lhs, rhs, "gt");
+		return isFloat ? builder->CreateFCmpOGT(lhs, rhs, "fgt") : builder->CreateICmpSGT(lhs, rhs, "gt");
 	}
 	if (expr.op == "<=") {
-		return isFloat ? builder->CreateFCmpOLE(lhs, rhs, "fle")
-					   : builder->CreateICmpSLE(lhs, rhs, "le");
+		return isFloat ? builder->CreateFCmpOLE(lhs, rhs, "fle") : builder->CreateICmpSLE(lhs, rhs, "le");
 	}
 	if (expr.op == ">=") {
-		return isFloat ? builder->CreateFCmpOGE(lhs, rhs, "fge")
-					   : builder->CreateICmpSGE(lhs, rhs, "ge");
+		return isFloat ? builder->CreateFCmpOGE(lhs, rhs, "fge") : builder->CreateICmpSGE(lhs, rhs, "ge");
 	}
 
 	// Logical operators.
@@ -2103,11 +2154,16 @@ llvm::Value* CodeGen::generateBinary(const BinaryExpr& expr) {
 	}
 
 	// Bitwise operators.
-	if (expr.op == "&") return builder->CreateAnd(lhs, rhs, "band");
-	if (expr.op == "|") return builder->CreateOr(lhs, rhs, "bor");
-	if (expr.op == "^") return builder->CreateXor(lhs, rhs, "bxor");
-	if (expr.op == "<<") return builder->CreateShl(lhs, rhs, "shl");
-	if (expr.op == ">>") return builder->CreateAShr(lhs, rhs, "shr");
+	if (expr.op == "&")
+		return builder->CreateAnd(lhs, rhs, "band");
+	if (expr.op == "|")
+		return builder->CreateOr(lhs, rhs, "bor");
+	if (expr.op == "^")
+		return builder->CreateXor(lhs, rhs, "bxor");
+	if (expr.op == "<<")
+		return builder->CreateShl(lhs, rhs, "shl");
+	if (expr.op == ">>")
+		return builder->CreateAShr(lhs, rhs, "shr");
 
 	throw CodeGenError("Unsupported binary operator: " + expr.op);
 }
@@ -2138,7 +2194,8 @@ llvm::Value* CodeGen::generateUnary(const UnaryExpr& expr) {
 	} else {
 		// Postfix: ++ or --
 		auto* ident = dynamic_cast<const IdentifierExpr*>(expr.operand.get());
-		if (!ident) throw CodeGenError("Postfix operator requires an identifier");
+		if (!ident)
+			throw CodeGenError("Postfix operator requires an identifier");
 
 		llvm::AllocaInst* ptr = lookupVariable(ident->name);
 		llvm::Type* type = lookupVarType(ident->name);
@@ -2153,7 +2210,7 @@ llvm::Value* CodeGen::generateUnary(const UnaryExpr& expr) {
 			throw CodeGenError("Unsupported postfix operator: " + expr.op);
 		}
 		builder->CreateStore(val, ptr);
-		return oldVal;  // Return original value (postfix semantics).
+		return oldVal;	// Return original value (postfix semantics).
 	}
 }
 
@@ -2169,8 +2226,7 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 	}
 
 	// Check for math stdlib functions.
-	if (callee && stdlibMathNames().count(callee->name) &&
-	    !overriddenMathFuncs_.count(callee->name)) {
+	if (callee && stdlibMathNames().count(callee->name) && !overriddenMathFuncs_.count(callee->name)) {
 		return generateMathCall(callee->name, expr.arguments);
 	}
 
@@ -2182,13 +2238,14 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 			auto* i64 = llvm::Type::getInt64Ty(*context);
 			// Heap-allocate the struct.
 			uint64_t structSize = module->getDataLayout().getTypeAllocSize(info.llvmType);
-			llvm::Value* heapPtr = builder->CreateCall(mallocFunc,
-				{llvm::ConstantInt::get(i64, structSize)}, callee->name + ".heap");
+			llvm::Value* heapPtr =
+				builder->CreateCall(mallocFunc, {llvm::ConstantInt::get(i64, structSize)}, callee->name + ".heap");
 			// Zero-initialize before calling constructor.
 			builder->CreateStore(llvm::Constant::getNullValue(info.llvmType), heapPtr);
 			// Call StructName.constructor(heapPtr, args...)
 			llvm::Function* ctor = module->getFunction(callee->name + ".constructor");
-			if (!ctor) throw CodeGenError("Constructor not found for " + callee->name);
+			if (!ctor)
+				throw CodeGenError("Constructor not found for " + callee->name);
 			std::vector<llvm::Value*> args = {heapPtr};
 			for (const auto& arg : expr.arguments) {
 				args.push_back(generateExpression(*arg));
@@ -2210,9 +2267,9 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 			// intercept, since the qualification makes intent unambiguous.
 			if (namespaceNames_.count(ident->name)) {
 				llvm::Function* fn = module->getFunction(memberAccess->member);
-				if (!fn) throw CodeGenError(
-					"Undefined function '" + memberAccess->member +
-					"' in module namespace '" + ident->name + "'");
+				if (!fn)
+					throw CodeGenError("Undefined function '" + memberAccess->member + "' in module namespace '"
+									   + ident->name + "'");
 				std::vector<llvm::Value*> callArgs;
 				for (const auto& arg : expr.arguments)
 					callArgs.push_back(generateExpression(*arg));
@@ -2268,7 +2325,8 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 			auto methodIt = info.methods.find(memberAccess->member);
 			if (methodIt != info.methods.end()) {
 				llvm::Function* method = module->getFunction(methodIt->second);
-				if (!method) throw CodeGenError("Undefined method: " + methodIt->second);
+				if (!method)
+					throw CodeGenError("Undefined method: " + methodIt->second);
 
 				std::vector<llvm::Value*> args = {objPtr};
 				for (const auto& arg : expr.arguments) {
@@ -2304,7 +2362,8 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 			fn = module->getFunction(aliasIt->second);
 		}
 	}
-	if (!fn) throw CodeGenError("Undefined function: " + fnName);
+	if (!fn)
+		throw CodeGenError("Undefined function: " + fnName);
 
 	std::vector<llvm::Value*> args;
 	for (const auto& arg : expr.arguments) {
@@ -2363,8 +2422,10 @@ llvm::Value* CodeGen::generatePrintCall(const std::vector<ExprPtr>& args) {
 
 			for (size_t i = 0; i < interpStr->expressions.size(); i++) {
 				for (char c : interpStr->fragments[i]) {
-					if (c == '%') formatStr += "%%";
-					else formatStr += c;
+					if (c == '%')
+						formatStr += "%%";
+					else
+						formatStr += c;
 				}
 
 				llvm::Value* val = generateExpression(*interpStr->expressions[i]);
@@ -2386,8 +2447,10 @@ llvm::Value* CodeGen::generatePrintCall(const std::vector<ExprPtr>& args) {
 				printArgs.push_back(val);
 			}
 			for (char c : interpStr->fragments.back()) {
-				if (c == '%') formatStr += "%%";
-				else formatStr += c;
+				if (c == '%')
+					formatStr += "%%";
+				else
+					formatStr += c;
 			}
 			formatStr += "\n";
 
@@ -2438,10 +2501,8 @@ void CodeGen::generatePrintArray(llvm::AllocaInst* arrAlloca, llvm::Type* elemTy
 	auto* i64 = llvm::Type::getInt64Ty(*context);
 	auto* ptrType = llvm::PointerType::getUnqual(*context);
 
-	llvm::Value* data = builder->CreateLoad(ptrType,
-		builder->CreateStructGEP(arrType, arrAlloca, 0), "data");
-	llvm::Value* len = builder->CreateLoad(i64,
-		builder->CreateStructGEP(arrType, arrAlloca, 1), "len");
+	llvm::Value* data = builder->CreateLoad(ptrType, builder->CreateStructGEP(arrType, arrAlloca, 0), "data");
+	llvm::Value* len = builder->CreateLoad(i64, builder->CreateStructGEP(arrType, arrAlloca, 1), "len");
 
 	// Print "["
 	llvm::Value* openFmt = builder->CreateGlobalStringPtr("[", "arr.open");
@@ -2508,12 +2569,9 @@ void CodeGen::generatePrintMap(llvm::AllocaInst* mapAlloca, llvm::Type* keyType,
 	auto* i64 = llvm::Type::getInt64Ty(*context);
 	auto* ptrType = llvm::PointerType::getUnqual(*context);
 
-	llvm::Value* keys = builder->CreateLoad(ptrType,
-		builder->CreateStructGEP(mapType, mapAlloca, 0), "keys");
-	llvm::Value* vals = builder->CreateLoad(ptrType,
-		builder->CreateStructGEP(mapType, mapAlloca, 1), "vals");
-	llvm::Value* len = builder->CreateLoad(i64,
-		builder->CreateStructGEP(mapType, mapAlloca, 2), "len");
+	llvm::Value* keys = builder->CreateLoad(ptrType, builder->CreateStructGEP(mapType, mapAlloca, 0), "keys");
+	llvm::Value* vals = builder->CreateLoad(ptrType, builder->CreateStructGEP(mapType, mapAlloca, 1), "vals");
+	llvm::Value* len = builder->CreateLoad(i64, builder->CreateStructGEP(mapType, mapAlloca, 2), "len");
 
 	// Print "{"
 	llvm::Value* openFmt = builder->CreateGlobalStringPtr("{", "map.open");
@@ -2586,28 +2644,30 @@ void CodeGen::generatePrintMap(llvm::AllocaInst* mapAlloca, llvm::Type* keyType,
 // Math stdlib
 // ==========================
 
-llvm::Value* CodeGen::generateMathCall(const std::string& name,
-                                        const std::vector<ExprPtr>& args) {
+llvm::Value* CodeGen::generateMathCall(const std::string& name, const std::vector<ExprPtr>& args) {
 	auto* f64 = llvm::Type::getDoubleTy(*context);
 	auto* i64 = llvm::Type::getInt64Ty(*context);
 
 	// Helper: get or create an LLVM intrinsic declaration for f64.
-	auto getIntrinsic = [&](llvm::Intrinsic::ID id,
-	                         std::vector<llvm::Type*> types = {}) -> llvm::Function* {
-		if (types.empty()) types = {f64};
+	auto getIntrinsic = [&](llvm::Intrinsic::ID id, std::vector<llvm::Type*> types = {}) -> llvm::Function* {
+		if (types.empty())
+			types = {f64};
 		return llvm::Intrinsic::getDeclaration(module.get(), id, types);
 	};
 
 	// --- abs(x) ---
 	if (name == "abs") {
-		if (args.size() != 1) throw CodeGenError("abs() requires exactly 1 argument");
+		if (args.size() != 1)
+			throw CodeGenError("abs() requires exactly 1 argument");
 		llvm::Value* val = generateExpression(*args[0]);
 		if (val->getType()->isDoubleTy() || val->getType()->isFloatTy()) {
-			if (!val->getType()->isDoubleTy()) val = builder->CreateFPExt(val, f64, "abs.promote");
+			if (!val->getType()->isDoubleTy())
+				val = builder->CreateFPExt(val, f64, "abs.promote");
 			return builder->CreateCall(getIntrinsic(llvm::Intrinsic::fabs), {val}, "abs");
 		}
 		// Integer: abs via compare and negate.
-		if (!val->getType()->isIntegerTy(64)) val = builder->CreateSExt(val, i64, "abs.ext");
+		if (!val->getType()->isIntegerTy(64))
+			val = builder->CreateSExt(val, i64, "abs.ext");
 		llvm::Value* neg = builder->CreateNeg(val, "abs.neg");
 		llvm::Value* isNeg = builder->CreateICmpSLT(val, llvm::ConstantInt::get(i64, 0), "abs.isneg");
 		return builder->CreateSelect(isNeg, neg, val, "abs");
@@ -2615,56 +2675,74 @@ llvm::Value* CodeGen::generateMathCall(const std::string& name,
 
 	// --- min(a, b) ---
 	if (name == "min") {
-		if (args.size() != 2) throw CodeGenError("min() requires exactly 2 arguments");
+		if (args.size() != 2)
+			throw CodeGenError("min() requires exactly 2 arguments");
 		llvm::Value* a = generateExpression(*args[0]);
 		llvm::Value* b = generateExpression(*args[1]);
-		bool isFloat = a->getType()->isDoubleTy() || a->getType()->isFloatTy() ||
-		               b->getType()->isDoubleTy() || b->getType()->isFloatTy();
+		bool isFloat = a->getType()->isDoubleTy() || a->getType()->isFloatTy() || b->getType()->isDoubleTy()
+					   || b->getType()->isFloatTy();
 		if (isFloat) {
-			if (a->getType()->isIntegerTy())      a = builder->CreateSIToFP(a, f64, "min.a");
-			else if (!a->getType()->isDoubleTy()) a = builder->CreateFPExt(a, f64, "min.a");
-			if (b->getType()->isIntegerTy())      b = builder->CreateSIToFP(b, f64, "min.b");
-			else if (!b->getType()->isDoubleTy()) b = builder->CreateFPExt(b, f64, "min.b");
+			if (a->getType()->isIntegerTy())
+				a = builder->CreateSIToFP(a, f64, "min.a");
+			else if (!a->getType()->isDoubleTy())
+				a = builder->CreateFPExt(a, f64, "min.a");
+			if (b->getType()->isIntegerTy())
+				b = builder->CreateSIToFP(b, f64, "min.b");
+			else if (!b->getType()->isDoubleTy())
+				b = builder->CreateFPExt(b, f64, "min.b");
 			return builder->CreateCall(getIntrinsic(llvm::Intrinsic::minnum), {a, b}, "min");
 		}
-		if (!a->getType()->isIntegerTy(64)) a = builder->CreateSExt(a, i64, "min.a");
-		if (!b->getType()->isIntegerTy(64)) b = builder->CreateSExt(b, i64, "min.b");
+		if (!a->getType()->isIntegerTy(64))
+			a = builder->CreateSExt(a, i64, "min.a");
+		if (!b->getType()->isIntegerTy(64))
+			b = builder->CreateSExt(b, i64, "min.b");
 		llvm::Value* cmp = builder->CreateICmpSLT(a, b, "min.cmp");
 		return builder->CreateSelect(cmp, a, b, "min");
 	}
 
 	// --- max(a, b) ---
 	if (name == "max") {
-		if (args.size() != 2) throw CodeGenError("max() requires exactly 2 arguments");
+		if (args.size() != 2)
+			throw CodeGenError("max() requires exactly 2 arguments");
 		llvm::Value* a = generateExpression(*args[0]);
 		llvm::Value* b = generateExpression(*args[1]);
-		bool isFloat = a->getType()->isDoubleTy() || a->getType()->isFloatTy() ||
-		               b->getType()->isDoubleTy() || b->getType()->isFloatTy();
+		bool isFloat = a->getType()->isDoubleTy() || a->getType()->isFloatTy() || b->getType()->isDoubleTy()
+					   || b->getType()->isFloatTy();
 		if (isFloat) {
-			if (a->getType()->isIntegerTy())      a = builder->CreateSIToFP(a, f64, "max.a");
-			else if (!a->getType()->isDoubleTy()) a = builder->CreateFPExt(a, f64, "max.a");
-			if (b->getType()->isIntegerTy())      b = builder->CreateSIToFP(b, f64, "max.b");
-			else if (!b->getType()->isDoubleTy()) b = builder->CreateFPExt(b, f64, "max.b");
+			if (a->getType()->isIntegerTy())
+				a = builder->CreateSIToFP(a, f64, "max.a");
+			else if (!a->getType()->isDoubleTy())
+				a = builder->CreateFPExt(a, f64, "max.a");
+			if (b->getType()->isIntegerTy())
+				b = builder->CreateSIToFP(b, f64, "max.b");
+			else if (!b->getType()->isDoubleTy())
+				b = builder->CreateFPExt(b, f64, "max.b");
 			return builder->CreateCall(getIntrinsic(llvm::Intrinsic::maxnum), {a, b}, "max");
 		}
-		if (!a->getType()->isIntegerTy(64)) a = builder->CreateSExt(a, i64, "max.a");
-		if (!b->getType()->isIntegerTy(64)) b = builder->CreateSExt(b, i64, "max.b");
+		if (!a->getType()->isIntegerTy(64))
+			a = builder->CreateSExt(a, i64, "max.a");
+		if (!b->getType()->isIntegerTy(64))
+			b = builder->CreateSExt(b, i64, "max.b");
 		llvm::Value* cmp = builder->CreateICmpSGT(a, b, "max.cmp");
 		return builder->CreateSelect(cmp, a, b, "max");
 	}
 
 	// --- pow(base, exp) ---
 	if (name == "pow") {
-		if (args.size() != 2) throw CodeGenError("pow() requires exactly 2 arguments");
+		if (args.size() != 2)
+			throw CodeGenError("pow() requires exactly 2 arguments");
 		llvm::Value* base = generateExpression(*args[0]);
-		llvm::Value* exp  = generateExpression(*args[1]);
-		if (!base->getType()->isDoubleTy()) base = builder->CreateSIToFP(base, f64, "pow.base");
-		if (!exp->getType()->isDoubleTy())  exp  = builder->CreateSIToFP(exp,  f64, "pow.exp");
+		llvm::Value* exp = generateExpression(*args[1]);
+		if (!base->getType()->isDoubleTy())
+			base = builder->CreateSIToFP(base, f64, "pow.base");
+		if (!exp->getType()->isDoubleTy())
+			exp = builder->CreateSIToFP(exp, f64, "pow.exp");
 		return builder->CreateCall(getIntrinsic(llvm::Intrinsic::pow, {f64}), {base, exp}, "pow");
 	}
 
 	// --- single-argument float intrinsics ---
-	if (args.size() != 1) throw CodeGenError(name + "() requires exactly 1 argument");
+	if (args.size() != 1)
+		throw CodeGenError(name + "() requires exactly 1 argument");
 	llvm::Value* val = generateExpression(*args[0]);
 	if (!val->getType()->isDoubleTy()) {
 		if (val->getType()->isIntegerTy())
@@ -2673,8 +2751,10 @@ llvm::Value* CodeGen::generateMathCall(const std::string& name,
 			val = builder->CreateFPExt(val, f64, name + ".conv");
 	}
 
-	if (name == "sin")   return builder->CreateCall(getIntrinsic(llvm::Intrinsic::sin),   {val}, "sin");
-	if (name == "cos")   return builder->CreateCall(getIntrinsic(llvm::Intrinsic::cos),   {val}, "cos");
+	if (name == "sin")
+		return builder->CreateCall(getIntrinsic(llvm::Intrinsic::sin), {val}, "sin");
+	if (name == "cos")
+		return builder->CreateCall(getIntrinsic(llvm::Intrinsic::cos), {val}, "cos");
 	if (name == "tan") {
 		// tan has no LLVM intrinsic; use the C math library function.
 		// Declare lazily to avoid symbol collision if user also defines 'overridden tan'.
@@ -2685,14 +2765,22 @@ llvm::Value* CodeGen::generateMathCall(const std::string& name,
 		}
 		return builder->CreateCall(tanFn, {val}, "tan");
 	}
-	if (name == "sqrt")  return builder->CreateCall(getIntrinsic(llvm::Intrinsic::sqrt),  {val}, "sqrt");
-	if (name == "floor") return builder->CreateCall(getIntrinsic(llvm::Intrinsic::floor), {val}, "floor");
-	if (name == "ceil")  return builder->CreateCall(getIntrinsic(llvm::Intrinsic::ceil),  {val}, "ceil");
-	if (name == "round") return builder->CreateCall(getIntrinsic(llvm::Intrinsic::round), {val}, "round");
-	if (name == "log")   return builder->CreateCall(getIntrinsic(llvm::Intrinsic::log),   {val}, "log");
-	if (name == "log2")  return builder->CreateCall(getIntrinsic(llvm::Intrinsic::log2),  {val}, "log2");
-	if (name == "log10") return builder->CreateCall(getIntrinsic(llvm::Intrinsic::log10), {val}, "log10");
-	if (name == "exp")   return builder->CreateCall(getIntrinsic(llvm::Intrinsic::exp),   {val}, "exp");
+	if (name == "sqrt")
+		return builder->CreateCall(getIntrinsic(llvm::Intrinsic::sqrt), {val}, "sqrt");
+	if (name == "floor")
+		return builder->CreateCall(getIntrinsic(llvm::Intrinsic::floor), {val}, "floor");
+	if (name == "ceil")
+		return builder->CreateCall(getIntrinsic(llvm::Intrinsic::ceil), {val}, "ceil");
+	if (name == "round")
+		return builder->CreateCall(getIntrinsic(llvm::Intrinsic::round), {val}, "round");
+	if (name == "log")
+		return builder->CreateCall(getIntrinsic(llvm::Intrinsic::log), {val}, "log");
+	if (name == "log2")
+		return builder->CreateCall(getIntrinsic(llvm::Intrinsic::log2), {val}, "log2");
+	if (name == "log10")
+		return builder->CreateCall(getIntrinsic(llvm::Intrinsic::log10), {val}, "log10");
+	if (name == "exp")
+		return builder->CreateCall(getIntrinsic(llvm::Intrinsic::exp), {val}, "exp");
 
 	throw CodeGenError("Unknown math function: " + name);
 }
