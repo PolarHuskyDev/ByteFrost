@@ -310,7 +310,12 @@ static std::string deriveObjPath(const std::string& srcPath, const std::string& 
 	if (objName.size() > 3 && objName.substr(objName.size() - 3) == ".bf") {
 		objName = objName.substr(0, objName.size() - 3);
 	}
-	return buildDir + "/" + objName + ".o";
+#ifdef _WIN32
+	const std::string objExt = ".obj";
+#else
+	const std::string objExt = ".o";
+#endif
+	return buildDir + "/" + objName + objExt;
 }
 
 // ==========================
@@ -772,10 +777,15 @@ int main(int argc, char* argv[]) {
 		OrcaConfig cfg = parseOrcaToml(tomlPath);
 		if (outputFile.empty()) {
 			// [build].output overrides the default (project name).
-			if (!cfg.output.empty())
+			if (!cfg.output.empty()) {
 				outputFile = cfg.output;
-			else
+			} else {
+#ifdef _WIN32
+				outputFile = cfg.name.empty() ? "a.exe" : cfg.name + ".exe";
+#else
 				outputFile = cfg.name.empty() ? "a.out" : cfg.name;
+#endif
+			}
 		}
 
 		// Select optimization level: [build].opt is base default; profile overrides it.

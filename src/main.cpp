@@ -86,17 +86,26 @@ int main(int argc, char* argv[]) {
 			// Emit native object file
 			CodeGen codegen;
 			codegen.setOptLevel(optLevel);
+#ifdef _WIN32
+			std::string objPath = outputFile.empty() ? "output.obj" : outputFile;
+#else
 			std::string objPath = outputFile.empty() ? "output.o" : outputFile;
+#endif
 			codegen.emitObjectFile(program, objPath);
 		} else {
 			// Default: compile + link → executable.
 			CodeGen codegen;
 			codegen.setOptLevel(optLevel);
-			std::string tmpObj = outputFile + ".tmp.o";
-			if (outputFile.empty()) {
+#ifdef _WIN32
+			// Windows: produce a .exe and use .obj for the intermediate object.
+			if (outputFile.empty())
+				outputFile = "a.exe";
+			std::string tmpObj = outputFile + ".tmp.obj";
+#else
+			if (outputFile.empty())
 				outputFile = "a.out";
-				tmpObj = "a.out.tmp.o";
-			}
+			std::string tmpObj = outputFile + ".tmp.o";
+#endif
 			codegen.emitObjectFile(program, tmpObj);
 
 			try {

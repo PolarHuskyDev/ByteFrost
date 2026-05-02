@@ -1004,14 +1004,22 @@ TEST(CodeGenEmitObj, EmitsValidObjectFile) {
 	auto size = f.tellg();
 	ASSERT_GT(size, 0) << "Object file is empty";
 
-	// Verify ELF magic number (0x7f 'E' 'L' 'F').
+	// Verify object file magic bytes.
 	f.seekg(0);
 	char magic[4];
 	f.read(magic, 4);
+#ifdef _WIN32
+	// COFF: first 2 bytes are Machine type (little-endian).
+	// IMAGE_FILE_MACHINE_AMD64 = 0x8664
+	EXPECT_EQ((unsigned char)magic[0], 0x64);
+	EXPECT_EQ((unsigned char)magic[1], 0x86);
+#else
+	// ELF magic number (0x7f 'E' 'L' 'F').
 	EXPECT_EQ(magic[0], 0x7f);
 	EXPECT_EQ(magic[1], 'E');
 	EXPECT_EQ(magic[2], 'L');
 	EXPECT_EQ(magic[3], 'F');
+#endif
 
 	std::remove(objPath.c_str());
 }
@@ -1056,19 +1064,25 @@ TEST(CodeGenOptLevel, O0AndO2ProduceDifferentObjectFiles) {
 		return static_cast<std::streamsize>(f.tellg());
 	};
 
-	auto checkELF = [](const std::string& path) {
+	auto checkObjMagic = [](const std::string& path) {
 		std::ifstream f(path, std::ios::binary);
 		ASSERT_TRUE(f.is_open()) << "Object file not created: " << path;
 		char magic[4];
 		f.read(magic, 4);
+#ifdef _WIN32
+		// COFF: IMAGE_FILE_MACHINE_AMD64 = 0x8664 (little-endian)
+		EXPECT_EQ((unsigned char)magic[0], 0x64);
+		EXPECT_EQ((unsigned char)magic[1], 0x86);
+#else
 		EXPECT_EQ(magic[0], 0x7f);
 		EXPECT_EQ(magic[1], 'E');
 		EXPECT_EQ(magic[2], 'L');
 		EXPECT_EQ(magic[3], 'F');
+#endif
 	};
 
-	checkELF(o0Path);
-	checkELF(o2Path);
+	checkObjMagic(o0Path);
+	checkObjMagic(o2Path);
 
 	auto sz0 = fileSize(o0Path);
 	auto sz2 = fileSize(o2Path);

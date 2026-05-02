@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.15)
 project(byte_frost CXX)
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 # Version injection — CI sets BF_VERSION via -DBF_VERSION=<tag>; dev builds use 0.0.0-dev.
 if(NOT DEFINED BF_VERSION)
     set(BF_VERSION "0.0.0-dev")
@@ -21,8 +24,9 @@ add_library(
 	src/tokenizer/lexer.cpp
 	src/parser/parser.cpp
 	src/codegen/codegen.cpp
-	src/linker/linker.cpp
 	src/module_resolver/module_resolver.cpp
+	# Linker: select the platform-specific implementation at configure time.
+	$<IF:$<BOOL:${WIN32}>,src/linker/linker_pe.cpp,src/linker/linker_elf.cpp>
 )
 
 target_include_directories(

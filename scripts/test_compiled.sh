@@ -88,6 +88,9 @@ run_test() {
         return
     fi
 
+    # Strip Windows CR so CRLF output compares cleanly against LF expected strings.
+    actual=$(printf '%s' "$actual" | tr -d '\r')
+
     # Show output if verbose.
     if [ "$VERBOSE" = true ]; then
         echo -e "  --- $name output ---"
@@ -190,6 +193,9 @@ run_orca_test() {
         return
     fi
 
+    # Strip Windows CR so CRLF output compares cleanly against LF expected strings.
+    actual=$(printf '%s' "$actual" | tr -d '\r')
+
     if [ "$VERBOSE" = true ]; then
         echo -e "  --- $name output ---"
         echo "$actual" | sed 's/^/    /'
@@ -279,8 +285,9 @@ run_orca_run_test() {
     fi
 
     # Filter out [orca] build-diagnostic lines; the remainder is the binary's output.
+    # Also strip Windows CR from CRLF executables.
     local actual
-    actual=$(echo "$raw_output" | grep -v '^\[orca\]' || true)
+    actual=$(echo "$raw_output" | grep -v '^\[orca\]' | tr -d '\r' || true)
 
     if [ "$actual" = "$expected" ]; then
         echo -e "  ${GREEN}PASS${NC} $name"
