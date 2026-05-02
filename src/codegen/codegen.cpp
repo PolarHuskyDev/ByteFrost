@@ -60,6 +60,24 @@ void CodeGen::initializeTarget() {
 	llvm::InitializeAllAsmPrinters();
 
 	auto triple = llvm::sys::getDefaultTargetTriple();
+#ifdef _WIN32
+	// Normalize to the MSVC ABI triple. When MinGW is installed,
+	// getDefaultTargetTriple() returns "x86_64-w64-mingw32", which causes LLVM
+	// to inject a call to __main() into every main() and produces an object
+	// incompatible with lld-link + MSVC CRT. Force windows-msvc instead.
+	{
+		llvm::Triple t(triple);
+		if (t.getEnvironment() == llvm::Triple::GNU ||
+			t.getEnvironment() == llvm::Triple::GNUX32 ||
+			t.getEnvironment() == llvm::Triple::UnknownEnvironment) {
+			t.setOS(llvm::Triple::Win32);
+			t.setVendor(llvm::Triple::PC);
+			t.setEnvironment(llvm::Triple::MSVC);
+			t.setObjectFormat(llvm::Triple::COFF);
+			triple = t.str();
+		}
+	}
+#endif
 	module->setTargetTriple(triple);
 
 	std::string error;
