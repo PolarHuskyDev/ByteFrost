@@ -1,11 +1,8 @@
 name: CI
 
 on:
-  push:
-    branches: ["**"]
-    tags-ignore: ["v*"]   # releases are handled by release.yml
   pull_request:
-    branches: ["**"]
+    branches: [main]
 
 jobs:
   build-and-test:
