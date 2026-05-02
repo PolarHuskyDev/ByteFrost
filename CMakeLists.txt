@@ -16,11 +16,15 @@ configure_file(
 find_package(LLVM REQUIRED)
 find_package(GTest REQUIRED)
 
-# On Windows the Conan llvm-core package ships LLVM-C as an import-library DLL
-# (LLVM-C.lib + LLVM-C.dll) even though the rest of LLVM is static.
-# Copy it next to each executable so it can be found at runtime.
-if(WIN32)
-    set(_llvm_c_dll "${LLVM_TOOLS_BINARY_DIR}/LLVM-C.dll")
+# On MSVC, Conan's llvm-core package links both the individual static LLVM .lib
+# files AND LLVM-C.lib (import stub for LLVM-C.dll, the C API wrapper).  The
+# DLL bundles its own copy of LLVM, which creates a second instance of the LLVM
+# target-registry singleton.  InitializeAllTargets() registers targets into one
+# instance while TargetRegistry::lookupTarget() searches the other, so lookup
+# always fails.  Since this project only uses LLVM's C++ API, suppress the
+# LLVM-C import-lib so the DLL is never pulled in.
+if(MSVC)
+    set_property(TARGET LLVM-C PROPERTY INTERFACE_LINK_LIBRARIES "")
 endif()
 
 # Core library shared between the main executable and tests
@@ -81,15 +85,3 @@ install(TARGETS byte_frost orca DESTINATION "."
         ARCHIVE DESTINATION lib
         LIBRARY DESTINATION lib
         )
-
-if(WIN32 AND EXISTS "${_llvm_c_dll}")
-    foreach(_target byte_frost orca unit_tests)
-        add_custom_command(TARGET ${_target} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_llvm_c_dll}"
-                "$<TARGET_FILE_DIR:${_target}>"
-            COMMENT "Copying LLVM-C.dll to output directory"
-        )
-    endforeach()
-    install(FILES "${_llvm_c_dll}" DESTINATION bin)
-endif()
