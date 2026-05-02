@@ -63,7 +63,7 @@ add_executable(
 target_link_libraries(unit_tests byte_frost_lib GTest::gtest GTest::gtest_main)
 
 include(GoogleTest)
-gtest_discover_tests(unit_tests)
+gtest_discover_tests(unit_tests DISCOVERY_MODE PRE_TEST)
 
 install(TARGETS byte_frost orca DESTINATION "."
         RUNTIME DESTINATION bin

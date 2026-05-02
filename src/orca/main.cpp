@@ -25,7 +25,8 @@
 #include <tokenizer/lexer.h>
 #include <tokenizer/tokens.h>
 #include <version.h>
-#include <unistd.h>
+
+#include <llvm/Support/Program.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -963,20 +964,24 @@ int main(int argc, char* argv[]) {
 
 		// orca run: replace this process with the built binary.
 		if (doRun) {
-			// execvp does not search CWD; prefix relative paths with "./".
 			std::string execPath = outputFile;
-			if (!execPath.empty() && execPath.front() != '/') {
+#ifndef _WIN32
+			// POSIX: ExecuteAndWait does not search CWD; prefix relative paths.
+			if (!execPath.empty() && execPath.front() != '/')
 				execPath = "./" + execPath;
-			}
-			std::vector<const char*> runArgv;
-			runArgv.push_back(execPath.c_str());
+#endif
+			std::vector<llvm::StringRef> runArgvRef;
+			runArgvRef.push_back(execPath);
 			for (const auto& a : runArgs)
-				runArgv.push_back(a.c_str());
-			runArgv.push_back(nullptr);
-			execvp(execPath.c_str(), const_cast<char* const*>(runArgv.data()));
-			// execvp only returns on error.
-			std::cerr << "[orca] Failed to execute '" << execPath << "': " << strerror(errno) << "\n";
-			return 1;
+				runArgvRef.push_back(a);
+			std::string errMsg;
+			int rc = llvm::sys::ExecuteAndWait(execPath, runArgvRef,
+											   /*Env=*/std::nullopt, /*Redirects=*/{},
+											   /*SecondsToWait=*/0, /*MemoryLimit=*/0,
+											   &errMsg);
+			if (!errMsg.empty())
+				std::cerr << "[orca] Failed to execute '" << execPath << "': " << errMsg << "\n";
+			return rc;
 		}
 
 	} catch (const std::exception& e) {
