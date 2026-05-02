@@ -16,6 +16,13 @@ configure_file(
 find_package(LLVM REQUIRED)
 find_package(GTest REQUIRED)
 
+# On Windows the Conan llvm-core package ships LLVM-C as an import-library DLL
+# (LLVM-C.lib + LLVM-C.dll) even though the rest of LLVM is static.
+# Copy it next to each executable so it can be found at runtime.
+if(WIN32)
+    set(_llvm_c_dll "${LLVM_TOOLS_BINARY_DIR}/LLVM-C.dll")
+endif()
+
 # Core library shared between the main executable and tests
 add_library(
 	byte_frost_lib
@@ -74,3 +81,15 @@ install(TARGETS byte_frost orca DESTINATION "."
         ARCHIVE DESTINATION lib
         LIBRARY DESTINATION lib
         )
+
+if(WIN32 AND EXISTS "${_llvm_c_dll}")
+    foreach(_target byte_frost orca unit_tests)
+        add_custom_command(TARGET ${_target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_llvm_c_dll}"
+                "$<TARGET_FILE_DIR:${_target}>"
+            COMMENT "Copying LLVM-C.dll to output directory"
+        )
+    endforeach()
+    install(FILES "${_llvm_c_dll}" DESTINATION bin)
+endif()
