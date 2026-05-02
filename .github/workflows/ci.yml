@@ -18,13 +18,11 @@ jobs:
             configure_preset: conan-release
             build_preset: conan-release
             bin_dir: build/Release
-            exe_ext: ""
           - os: windows-latest
             name: Windows
             configure_preset: conan-default
             build_preset: conan-release
             bin_dir: build/Release
-            exe_ext: ".exe"
 
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.name }}
@@ -79,14 +77,9 @@ jobs:
         shell: bash
         run: cmake --build --preset ${{ matrix.build_preset }}
 
-      - name: Run unit tests (Linux)
-        if: runner.os == 'Linux'
-        run: ./${{ matrix.bin_dir }}/unit_tests
-
-      - name: Run unit tests (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: .\${{ matrix.bin_dir }}\unit_tests.exe
+      - name: Run unit tests
+        shell: bash
+        run: ctest --test-dir ${{ matrix.bin_dir }} -C Release --output-on-failure
 
       - name: Run E2E tests (Linux only)
         if: runner.os == 'Linux'
