@@ -82,7 +82,9 @@ jobs:
       - name: Run unit tests
         shell: bash
         run: |
-          ls -la ./${{ matrix.bin_dir }}
+          pwd
+          ls -la ./build
+          ls -la ./build/Release
           ./${{ matrix.bin_dir }}/unit_tests${{ matrix.exe_ext }}
 
       - name: Run E2E tests (Linux only)
