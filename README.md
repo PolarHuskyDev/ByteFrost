@@ -1,4 +1,4 @@
-# ByteFrost programming language
+# ByteFrost programming language [![CI](https://github.com/PolarHuskyDev/ByteFrost/actions/workflows/ci.yml/badge.svg)](https://github.com/PolarHuskyDev/ByteFrost/actions/workflows/ci.yml) [![Release](https://github.com/PolarHuskyDev/ByteFrost/actions/workflows/release.yml/badge.svg)](https://github.com/PolarHuskyDev/ByteFrost/actions/workflows/release.yml)
 
 > The bible for this project is [LLVM tutorial](https://llvm.org/docs/tutorial/MyFirstLanguageFrontend/index.html)
 
