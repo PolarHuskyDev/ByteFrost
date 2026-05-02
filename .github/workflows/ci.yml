@@ -18,11 +18,13 @@ jobs:
             configure_preset: conan-release
             build_preset: conan-release
             bin_dir: build/Release
+            unit_tests_bin: build/Release/unit_tests
           - os: windows-latest
             name: Windows
             configure_preset: conan-default
             build_preset: conan-release
             bin_dir: build/Release
+            unit_tests_bin: build/Release/unit_tests.exe
 
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.name }}
@@ -82,7 +84,7 @@ jobs:
 
       - name: Run unit tests
         shell: bash
-        run: ctest --test-dir ${{ matrix.bin_dir }} -C Release --output-on-failure --no-tests=error
+        run: ./${{ matrix.unit_tests_bin }}
 
       - name: Run E2E tests
         shell: bash
