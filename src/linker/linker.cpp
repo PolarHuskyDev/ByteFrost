@@ -1,5 +1,7 @@
 #include "linker/linker.h"
 
+#ifndef _WIN32
+
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/Program.h>
 #include <llvm/Support/raw_ostream.h>
@@ -331,3 +333,22 @@ std::vector<std::string> Linker::detectSystemLibPaths(const std::string& linkerE
 	}
 	return paths;
 }
+
+#else  // _WIN32
+
+// ELF linking is not supported on Windows. All methods throw so that the
+// compiler front-ends can surface a clear error message at runtime.
+
+void Linker::link(const Config&) {
+	throw LinkerError("Native ELF linking is not supported on Windows. "
+					  "Cross-compile from a Linux host or use WSL.");
+}
+
+std::string Linker::findLinker() { return ""; }
+std::string Linker::findCRTObject(const std::string&, const std::vector<std::string>&) { return ""; }
+std::string Linker::findDynamicLinker(const std::string&) { return ""; }
+std::string Linker::detectLinkerEmulation() { return ""; }
+std::vector<std::string> Linker::detectGCCLibPaths() { return {}; }
+std::vector<std::string> Linker::detectSystemLibPaths(const std::string&) { return {}; }
+
+#endif  // _WIN32
