@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -995,7 +996,7 @@ TEST(CodeGenEmitObj, EmitsValidObjectFile) {
 	Program program = parser.parseProgram();
 
 	CodeGen codegen;
-	std::string objPath = "/tmp/bytefrost_test_emit.o";
+	std::string objPath = (std::filesystem::temp_directory_path() / "bytefrost_test_emit.o").string();
 	codegen.emitObjectFile(program, objPath);
 
 	// Verify the file exists and has content.
@@ -1052,8 +1053,8 @@ TEST(CodeGenOptLevel, O0AndO2ProduceDifferentObjectFiles) {
 		codegen.emitObjectFile(program, path);
 	};
 
-	const std::string o0Path = "/tmp/bytefrost_opt_o0.o";
-	const std::string o2Path = "/tmp/bytefrost_opt_o2.o";
+	const std::string o0Path = (std::filesystem::temp_directory_path() / "bytefrost_opt_o0.o").string();
+	const std::string o2Path = (std::filesystem::temp_directory_path() / "bytefrost_opt_o2.o").string();
 	compileToObj(CodeGen::OptLevel::O0, o0Path);
 	compileToObj(CodeGen::OptLevel::O2, o2Path);
 

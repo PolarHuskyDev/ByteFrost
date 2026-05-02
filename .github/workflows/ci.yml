@@ -1,11 +1,8 @@
 name: CI
 
 on:
-  push:
-    branches: ["**"]
-    tags-ignore: ["v*"]   # releases are handled by release.yml
   pull_request:
-    branches: ["**"]
+    branches: [main]
 
 jobs:
   build-and-test:
@@ -18,13 +15,13 @@ jobs:
             configure_preset: conan-release
             build_preset: conan-release
             bin_dir: build/Release
-            exe_ext: ""
+            unit_tests_bin: build/Release/unit_tests
           - os: windows-latest
             name: Windows
             configure_preset: conan-default
             build_preset: conan-release
             bin_dir: build/Release
-            exe_ext: ".exe"
+            unit_tests_bin: build/Release/unit_tests.exe
 
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.name }}
@@ -53,10 +50,6 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update -y && sudo apt-get install -y lld
 
-      - name: Set up MSVC (Windows)
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-
       - name: Detect Conan profile
         run: conan profile detect --force
 
@@ -68,12 +61,19 @@ jobs:
             --settings build_type=Release \
             --settings compiler.cppstd=17
 
-      - name: Configure
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           cmake --preset ${{ matrix.configure_preset }} \
-            -DBF_VERSION=0.0.0-dev \
-            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+            -DBF_VERSION=0.0.0-dev
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cmake --preset ${{ matrix.configure_preset }} \
+            -DBF_VERSION=0.0.0-dev
 
       - name: Build
         shell: bash
@@ -81,8 +81,8 @@ jobs:
 
       - name: Run unit tests
         shell: bash
-        run: ./${{ matrix.bin_dir }}/unit_tests${{ matrix.exe_ext }}
+        run: ./${{ matrix.unit_tests_bin }}
 
-      - name: Run E2E tests (Linux only)
-        if: runner.os == 'Linux'
+      - name: Run E2E tests
+        shell: bash
         run: bash scripts/test_compiled.sh

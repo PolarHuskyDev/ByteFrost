@@ -16,6 +16,17 @@ configure_file(
 find_package(LLVM REQUIRED)
 find_package(GTest REQUIRED)
 
+# On MSVC, Conan's llvm-core package links both the individual static LLVM .lib
+# files AND LLVM-C.lib (import stub for LLVM-C.dll, the C API wrapper).  The
+# DLL bundles its own copy of LLVM, which creates a second instance of the LLVM
+# target-registry singleton.  InitializeAllTargets() registers targets into one
+# instance while TargetRegistry::lookupTarget() searches the other, so lookup
+# always fails.  Since this project only uses LLVM's C++ API, suppress the
+# LLVM-C import-lib so the DLL is never pulled in.
+if(MSVC)
+    set_property(TARGET LLVM-C PROPERTY INTERFACE_LINK_LIBRARIES "")
+endif()
+
 # Core library shared between the main executable and tests
 add_library(
 	byte_frost_lib
