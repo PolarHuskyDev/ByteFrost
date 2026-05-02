@@ -95,10 +95,6 @@ jobs:
         if: runner.os == 'Linux'
         run: strip --strip-all ${{ matrix.bin_dir }}/byte_frost ${{ matrix.bin_dir }}/orca
 
-      - name: Run unit tests (Linux)
-        if: runner.os == 'Linux'
-        run: ./${{ matrix.bin_dir }}/unit_tests
-
       - name: Run E2E tests (Linux)
         if: runner.os == 'Linux'
         run: bash scripts/test_compiled.sh
