@@ -1,0 +1,4 @@
+#pragma once
+// CMake configure_file template — processed into build/include/version.h at configure time.
+// @BF_VERSION@ is substituted by CMake from the -DBF_VERSION=<value> cache variable.
+#define BF_VERSION "@BF_VERSION@"

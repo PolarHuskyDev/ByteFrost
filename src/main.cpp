@@ -7,6 +7,7 @@
 #include "parser/parser.h"
 #include "tokenizer/lexer.h"
 #include "tokenizer/tokens.h"
+#include "version.h"
 
 int main(int argc, char* argv[]) {
 	const char* filename = "tests/fib.bf";
@@ -16,7 +17,10 @@ int main(int argc, char* argv[]) {
 	CodeGen::OptLevel optLevel = CodeGen::OptLevel::O0;
 
 	for (int i = 1; i < argc; i++) {
-		if (std::strcmp(argv[i], "--emit-ir") == 0) {
+		if (std::strcmp(argv[i], "--version") == 0 || std::strcmp(argv[i], "-V") == 0) {
+			std::cout << "byte_frost " << BF_VERSION << "\n";
+			return 0;
+		} else if (std::strcmp(argv[i], "--emit-ir") == 0) {
 			emitIR = true;
 		} else if (std::strcmp(argv[i], "--emit-obj") == 0) {
 			emitObj = true;
@@ -24,15 +28,20 @@ int main(int argc, char* argv[]) {
 			outputFile = argv[++i];
 		} else if (std::strncmp(argv[i], "-O", 2) == 0) {
 			std::string_view lvl = argv[i] + 2;
-			if      (lvl == "0") optLevel = CodeGen::OptLevel::O0;
-			else if (lvl == "1") optLevel = CodeGen::OptLevel::O1;
-			else if (lvl == "2") optLevel = CodeGen::OptLevel::O2;
-			else if (lvl == "3") optLevel = CodeGen::OptLevel::O3;
-			else if (lvl == "s") optLevel = CodeGen::OptLevel::Os;
-			else if (lvl == "z") optLevel = CodeGen::OptLevel::Oz;
+			if (lvl == "0")
+				optLevel = CodeGen::OptLevel::O0;
+			else if (lvl == "1")
+				optLevel = CodeGen::OptLevel::O1;
+			else if (lvl == "2")
+				optLevel = CodeGen::OptLevel::O2;
+			else if (lvl == "3")
+				optLevel = CodeGen::OptLevel::O3;
+			else if (lvl == "s")
+				optLevel = CodeGen::OptLevel::Os;
+			else if (lvl == "z")
+				optLevel = CodeGen::OptLevel::Oz;
 			else {
-				std::cerr << "Unknown optimization level: " << argv[i]
-				          << "  (valid: -O0 -O1 -O2 -O3 -Os -Oz)\n";
+				std::cerr << "Unknown optimization level: " << argv[i] << "  (valid: -O0 -O1 -O2 -O3 -Os -Oz)\n";
 				return 1;
 			}
 		} else {

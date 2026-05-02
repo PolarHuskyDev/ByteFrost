@@ -1,0 +1,194 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-rc[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-beta[0-9]+"
+
+permissions:
+  contents: write   # required to create GitHub Releases and upload assets
+
+jobs:
+  # ─── Build matrix ───────────────────────────────────────────────────────────
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            name: Linux
+            configure_preset: conan-release
+            build_preset: conan-release
+            bin_dir: build/Release
+          - os: windows-latest
+            name: Windows
+            configure_preset: conan-default
+            build_preset: conan-release
+            bin_dir: build/Release/Release
+
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.name }})
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: "true"
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # needed so git describe works
+
+      - name: Extract version from tag
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"          # e.g. v1.2.0
+          echo "BF_VERSION=${TAG#v}" >> "$GITHUB_ENV"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Conan
+        run: pip install "conan>=2"
+
+      - name: Cache Conan packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.conan2/p
+          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py') }}
+          restore-keys: conan-${{ runner.os }}-
+
+      # ── Linux ────────────────────────────────────────────────────────────────
+      - name: Install system tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -y && sudo apt-get install -y lld
+
+      # ── Windows ──────────────────────────────────────────────────────────────
+      - name: Set up MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Detect Conan profile
+        run: conan profile detect --force
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          conan install . \
+            --build=missing \
+            --settings build_type=Release \
+            --settings compiler.cppstd=17
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cmake --preset ${{ matrix.configure_preset }} \
+            -DBF_VERSION="$BF_VERSION" \
+            -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: cmake --build --preset ${{ matrix.build_preset }} --target byte_frost orca
+
+      - name: Strip binaries (Linux)
+        if: runner.os == 'Linux'
+        run: strip --strip-all ${{ matrix.bin_dir }}/byte_frost ${{ matrix.bin_dir }}/orca
+
+      - name: Run unit tests (Linux)
+        if: runner.os == 'Linux'
+        run: ./${{ matrix.bin_dir }}/unit_tests
+
+      - name: Run E2E tests (Linux)
+        if: runner.os == 'Linux'
+        run: bash scripts/test_compiled.sh
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          ARCHIVE_NAME="bytefrost-v${BF_VERSION}-linux-x86_64"
+          mkdir -p "dist/${ARCHIVE_NAME}/bin"
+          cp ${{ matrix.bin_dir }}/byte_frost ${{ matrix.bin_dir }}/orca "dist/${ARCHIVE_NAME}/bin/"
+          cp README.md LICENSE "dist/${ARCHIVE_NAME}/"
+          tar -czf "${ARCHIVE_NAME}.tar.gz" -C dist "${ARCHIVE_NAME}"
+          sha256sum "${ARCHIVE_NAME}.tar.gz" > SHA256SUMS
+
+      # ── Windows ──────────────────────────────────────────────────────────────
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cmake --preset ${{ matrix.configure_preset }} \
+            "-DBF_VERSION=$BF_VERSION" \
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: cmake --build --preset ${{ matrix.build_preset }} --target byte_frost orca --config Release
+
+      - name: Run unit tests (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: ./${{ matrix.bin_dir }}/unit_tests.exe
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archiveName = "bytefrost-v$env:BF_VERSION-windows-x86_64"
+          New-Item -ItemType Directory -Force -Path "dist\$archiveName\bin"
+          Copy-Item "${{ matrix.bin_dir }}\byte_frost.exe", "${{ matrix.bin_dir }}\orca.exe" `
+            -Destination "dist\$archiveName\bin\"
+          Copy-Item README.md, LICENSE -Destination "dist\$archiveName\"
+          Compress-Archive -Path "dist\$archiveName" `
+            -DestinationPath "$archiveName.zip"
+          $hash = (Get-FileHash "$archiveName.zip" -Algorithm SHA256).Hash
+          "$hash  $archiveName.zip" | Out-File -Append SHA256SUMS -Encoding utf8
+
+      # ── Upload artifacts for the publish job ──────────────────────────────────
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.name }}
+          path: |
+            bytefrost-v*-linux-x86_64.tar.gz
+            bytefrost-v*-windows-x86_64.zip
+            SHA256SUMS
+          if-no-files-found: ignore
+          retention-days: 1
+
+  # ─── Publish job ────────────────────────────────────────────────────────────
+  publish:
+    needs: build
+    runs-on: ubuntu-22.04
+    name: Publish GitHub Release
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Extract version from tag
+        run: echo "BF_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Merge SHA256SUMS
+        run: |
+          find artifacts/ -name SHA256SUMS -exec cat {} \; >> SHA256SUMS
+          echo "=== SHA256SUMS ===" && cat SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "ByteFrost v${{ env.BF_VERSION }}"
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
+          generate_release_notes: true
+          files: |
+            artifacts/release-Linux/bytefrost-v*-linux-x86_64.tar.gz
+            artifacts/release-Windows/bytefrost-v*-windows-x86_64.zip
+            SHA256SUMS

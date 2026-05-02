@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags-ignore: ["v*"]   # releases are handled by release.yml
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            name: Linux
+            configure_preset: conan-release
+            build_preset: conan-release
+            bin_dir: build/Release
+            exe_ext: ""
+          - os: windows-latest
+            name: Windows
+            configure_preset: conan-default
+            build_preset: conan-release
+            bin_dir: build/Release
+            exe_ext: ".exe"
+
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.name }}
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: "true"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Conan
+        run: pip install "conan>=2"
+
+      - name: Cache Conan packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.conan2/p
+          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py') }}
+          restore-keys: conan-${{ runner.os }}-
+
+      - name: Install system tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -y && sudo apt-get install -y lld
+
+      - name: Set up MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Detect Conan profile
+        run: conan profile detect --force
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          conan install . \
+            --build=missing \
+            --settings build_type=Release \
+            --settings compiler.cppstd=17
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake --preset ${{ matrix.configure_preset }} \
+            -DBF_VERSION=0.0.0-dev \
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+
+      - name: Build
+        shell: bash
+        run: cmake --build --preset ${{ matrix.build_preset }}
+
+      - name: Run unit tests
+        shell: bash
+        run: ./${{ matrix.bin_dir }}/unit_tests${{ matrix.exe_ext }}
+
+      - name: Run E2E tests (Linux only)
+        if: runner.os == 'Linux'
+        run: bash scripts/test_compiled.sh

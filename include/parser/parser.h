@@ -11,13 +11,14 @@ class ParseError : public std::runtime_error {
    public:
 	int line;
 	int column;
-	ParseError(const std::string& msg, int line, int column)
-		: std::runtime_error(msg), line(line), column(column) {}
+	ParseError(const std::string& msg, int line, int column) : std::runtime_error(msg), line(line), column(column) {
+	}
 };
 
 class Parser {
    public:
-	Parser(const std::vector<Token>& tokens) : tokens(tokens), pos(0) {}
+	Parser(const std::vector<Token>& tokens) : tokens(tokens), pos(0) {
+	}
 
 	Program parseProgram();
 

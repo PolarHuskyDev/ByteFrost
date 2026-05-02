@@ -1,6 +1,15 @@
 cmake_minimum_required(VERSION 3.15)
 project(byte_frost CXX)
 
+# Version injection — CI sets BF_VERSION via -DBF_VERSION=<tag>; dev builds use 0.0.0-dev.
+if(NOT DEFINED BF_VERSION)
+    set(BF_VERSION "0.0.0-dev")
+endif()
+configure_file(
+    "${CMAKE_SOURCE_DIR}/include/version.h.in"
+    "${CMAKE_BINARY_DIR}/include/version.h"
+)
+
 find_package(LLVM REQUIRED)
 find_package(GTest REQUIRED)
 
@@ -20,6 +29,7 @@ target_include_directories(
 	byte_frost_lib
 	PUBLIC
 	include
+	"${CMAKE_BINARY_DIR}/include"
 )
 
 target_link_libraries(byte_frost_lib PUBLIC llvm-core::llvm-core)
@@ -53,7 +63,7 @@ add_executable(
 target_link_libraries(unit_tests byte_frost_lib GTest::gtest GTest::gtest_main)
 
 include(GoogleTest)
-gtest_discover_tests(unit_tests)
+gtest_discover_tests(unit_tests DISCOVERY_MODE PRE_TEST)
 
 install(TARGETS byte_frost orca DESTINATION "."
         RUNTIME DESTINATION bin

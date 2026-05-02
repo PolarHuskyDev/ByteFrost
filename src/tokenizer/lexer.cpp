@@ -80,12 +80,12 @@ void Lexer::skipLineComment() {
 
 void Lexer::skipBlockComment() {
 	// Skip past the opening /*
-	advance(); // consume '/'
-	advance(); // consume '*'
+	advance();	// consume '/'
+	advance();	// consume '*'
 	while (position < source.size()) {
 		if (current() == '*' && peek() == '/') {
-			advance(); // consume '*'
-			advance(); // consume '/'
+			advance();	// consume '*'
+			advance();	// consume '/'
 			return;
 		}
 		advance();
@@ -178,12 +178,9 @@ Token Lexer::nextToken() {
 // ==========================
 
 bool Lexer::isSpecialChar(char c) const {
-	return c == '+' || c == '-' || c == '*' || c == '/' || c == '%' ||
-		   c == '=' || c == '!' || c == '<' || c == '>' ||
-		   c == '(' || c == ')' || c == '{' || c == '}' ||
-		   c == '[' || c == ']' || c == ';' || c == ':' ||
-		   c == ',' || c == '.' || c == '&' || c == '|' ||
-		   c == '^' || c == '~';
+	return c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '=' || c == '!' || c == '<' || c == '>'
+		   || c == '(' || c == ')' || c == '{' || c == '}' || c == '[' || c == ']' || c == ';' || c == ':' || c == ','
+		   || c == '.' || c == '&' || c == '|' || c == '^' || c == '~';
 }
 
 Token Lexer::parseOperatorOrDelimiter() {
@@ -193,51 +190,127 @@ Token Lexer::parseOperatorOrDelimiter() {
 	// Two-character operators (check longest match first)
 	switch (c) {
 		case '=':
-			if (peek() == '=') { advance(); advance(); return Token(TokenType::EQUAL_TOKEN, "==", line, startColumn); }
-			if (peek() == '>') { advance(); advance(); return Token(TokenType::ARROW_TOKEN, "=>", line, startColumn); }
+			if (peek() == '=') {
+				advance();
+				advance();
+				return Token(TokenType::EQUAL_TOKEN, "==", line, startColumn);
+			}
+			if (peek() == '>') {
+				advance();
+				advance();
+				return Token(TokenType::ARROW_TOKEN, "=>", line, startColumn);
+			}
 			break;
 		case '!':
-			if (peek() == '=') { advance(); advance(); return Token(TokenType::NOT_EQUAL_TOKEN, "!=", line, startColumn); }
+			if (peek() == '=') {
+				advance();
+				advance();
+				return Token(TokenType::NOT_EQUAL_TOKEN, "!=", line, startColumn);
+			}
 			break;
 		case '<':
-			if (peek() == '=') { advance(); advance(); return Token(TokenType::LESS_EQUAL_TOKEN, "<=", line, startColumn); }
-			if (peek() == '<') { advance(); advance(); return Token(TokenType::LEFT_SHIFT_TOKEN, "<<", line, startColumn); }
+			if (peek() == '=') {
+				advance();
+				advance();
+				return Token(TokenType::LESS_EQUAL_TOKEN, "<=", line, startColumn);
+			}
+			if (peek() == '<') {
+				advance();
+				advance();
+				return Token(TokenType::LEFT_SHIFT_TOKEN, "<<", line, startColumn);
+			}
 			break;
 		case '>':
-			if (peek() == '=') { advance(); advance(); return Token(TokenType::GREATER_EQUAL_TOKEN, ">=", line, startColumn); }
-			if (peek() == '>') { advance(); advance(); return Token(TokenType::RIGHT_SHIFT_TOKEN, ">>", line, startColumn); }
+			if (peek() == '=') {
+				advance();
+				advance();
+				return Token(TokenType::GREATER_EQUAL_TOKEN, ">=", line, startColumn);
+			}
+			if (peek() == '>') {
+				advance();
+				advance();
+				return Token(TokenType::RIGHT_SHIFT_TOKEN, ">>", line, startColumn);
+			}
 			break;
 		case '+':
-			if (peek() == '+') { advance(); advance(); return Token(TokenType::INCREMENT_TOKEN, "++", line, startColumn); }
-			if (peek() == '=') { advance(); advance(); return Token(TokenType::PLUS_ASSIGN_TOKEN, "+=", line, startColumn); }
+			if (peek() == '+') {
+				advance();
+				advance();
+				return Token(TokenType::INCREMENT_TOKEN, "++", line, startColumn);
+			}
+			if (peek() == '=') {
+				advance();
+				advance();
+				return Token(TokenType::PLUS_ASSIGN_TOKEN, "+=", line, startColumn);
+			}
 			break;
 		case '-':
-			if (peek() == '-') { advance(); advance(); return Token(TokenType::DECREMENT_TOKEN, "--", line, startColumn); }
-			if (peek() == '=') { advance(); advance(); return Token(TokenType::MINUS_ASSIGN_TOKEN, "-=", line, startColumn); }
+			if (peek() == '-') {
+				advance();
+				advance();
+				return Token(TokenType::DECREMENT_TOKEN, "--", line, startColumn);
+			}
+			if (peek() == '=') {
+				advance();
+				advance();
+				return Token(TokenType::MINUS_ASSIGN_TOKEN, "-=", line, startColumn);
+			}
 			break;
 		case '*':
-			if (peek() == '=') { advance(); advance(); return Token(TokenType::MULTIPLY_ASSIGN_TOKEN, "*=", line, startColumn); }
+			if (peek() == '=') {
+				advance();
+				advance();
+				return Token(TokenType::MULTIPLY_ASSIGN_TOKEN, "*=", line, startColumn);
+			}
 			break;
 		case '/':
-			if (peek() == '=') { advance(); advance(); return Token(TokenType::DIVIDE_ASSIGN_TOKEN, "/=", line, startColumn); }
+			if (peek() == '=') {
+				advance();
+				advance();
+				return Token(TokenType::DIVIDE_ASSIGN_TOKEN, "/=", line, startColumn);
+			}
 			break;
 		case '%':
-			if (peek() == '=') { advance(); advance(); return Token(TokenType::MODULO_ASSIGN_TOKEN, "%=", line, startColumn); }
+			if (peek() == '=') {
+				advance();
+				advance();
+				return Token(TokenType::MODULO_ASSIGN_TOKEN, "%=", line, startColumn);
+			}
 			break;
 		case '&':
-			if (peek() == '&') { advance(); advance(); return Token(TokenType::AND_TOKEN, "&&", line, startColumn); }
+			if (peek() == '&') {
+				advance();
+				advance();
+				return Token(TokenType::AND_TOKEN, "&&", line, startColumn);
+			}
 			break;
 		case '|':
-			if (peek() == '|') { advance(); advance(); return Token(TokenType::OR_TOKEN, "||", line, startColumn); }
+			if (peek() == '|') {
+				advance();
+				advance();
+				return Token(TokenType::OR_TOKEN, "||", line, startColumn);
+			}
 			break;
 		case '^':
-			if (peek() == '^') { advance(); advance(); return Token(TokenType::XOR_TOKEN, "^^", line, startColumn); }
+			if (peek() == '^') {
+				advance();
+				advance();
+				return Token(TokenType::XOR_TOKEN, "^^", line, startColumn);
+			}
 			break;
 		case ':':
-			if (peek() == '=') { advance(); advance(); return Token(TokenType::WALRUS_TOKEN, ":=", line, startColumn); }
+			if (peek() == '=') {
+				advance();
+				advance();
+				return Token(TokenType::WALRUS_TOKEN, ":=", line, startColumn);
+			}
 			break;
 		case '.':
-			if (peek() == '.') { advance(); advance(); return Token(TokenType::DOTDOT_TOKEN, "..", line, startColumn); }
+			if (peek() == '.') {
+				advance();
+				advance();
+				return Token(TokenType::DOTDOT_TOKEN, "..", line, startColumn);
+			}
 			break;
 		default:
 			break;
@@ -246,30 +319,54 @@ Token Lexer::parseOperatorOrDelimiter() {
 	// Single-character operators and delimiters
 	advance();
 	switch (c) {
-		case '+': return Token(TokenType::PLUS_TOKEN, "+", line, startColumn);
-		case '-': return Token(TokenType::MINUS_TOKEN, "-", line, startColumn);
-		case '*': return Token(TokenType::MULTIPLY_TOKEN, "*", line, startColumn);
-		case '/': return Token(TokenType::DIVIDE_TOKEN, "/", line, startColumn);
-		case '%': return Token(TokenType::MODULO_TOKEN, "%", line, startColumn);
-		case '=': return Token(TokenType::ASSIGN_TOKEN, "=", line, startColumn);
-		case '!': return Token(TokenType::NOT_TOKEN, "!", line, startColumn);
-		case '<': return Token(TokenType::LESS_TOKEN, "<", line, startColumn);
-		case '>': return Token(TokenType::GREATER_TOKEN, ">", line, startColumn);
-		case '&': return Token(TokenType::BIT_AND_TOKEN, "&", line, startColumn);
-		case '|': return Token(TokenType::BIT_OR_TOKEN, "|", line, startColumn);
-		case '^': return Token(TokenType::BIT_XOR_TOKEN, "^", line, startColumn);
-		case '~': return Token(TokenType::BIT_NOT_TOKEN, "~", line, startColumn);
-		case '(': return Token(TokenType::LEFT_PAREN_TOKEN, "(", line, startColumn);
-		case ')': return Token(TokenType::RIGHT_PAREN_TOKEN, ")", line, startColumn);
-		case '{': return Token(TokenType::LEFT_BRACE_TOKEN, "{", line, startColumn);
-		case '}': return Token(TokenType::RIGHT_BRACE_TOKEN, "}", line, startColumn);
-		case '[': return Token(TokenType::LEFT_BRACKET_TOKEN, "[", line, startColumn);
-		case ']': return Token(TokenType::RIGHT_BRACKET_TOKEN, "]", line, startColumn);
-		case ';': return Token(TokenType::SEMICOLON_TOKEN, ";", line, startColumn);
-		case ':': return Token(TokenType::COLON_TOKEN, ":", line, startColumn);
-		case ',': return Token(TokenType::COMMA_TOKEN, ",", line, startColumn);
-		case '.': return Token(TokenType::DOT_TOKEN, ".", line, startColumn);
-		default:  return Token(TokenType::UNKNOWN_TOKEN, std::string(1, c), line, startColumn);
+		case '+':
+			return Token(TokenType::PLUS_TOKEN, "+", line, startColumn);
+		case '-':
+			return Token(TokenType::MINUS_TOKEN, "-", line, startColumn);
+		case '*':
+			return Token(TokenType::MULTIPLY_TOKEN, "*", line, startColumn);
+		case '/':
+			return Token(TokenType::DIVIDE_TOKEN, "/", line, startColumn);
+		case '%':
+			return Token(TokenType::MODULO_TOKEN, "%", line, startColumn);
+		case '=':
+			return Token(TokenType::ASSIGN_TOKEN, "=", line, startColumn);
+		case '!':
+			return Token(TokenType::NOT_TOKEN, "!", line, startColumn);
+		case '<':
+			return Token(TokenType::LESS_TOKEN, "<", line, startColumn);
+		case '>':
+			return Token(TokenType::GREATER_TOKEN, ">", line, startColumn);
+		case '&':
+			return Token(TokenType::BIT_AND_TOKEN, "&", line, startColumn);
+		case '|':
+			return Token(TokenType::BIT_OR_TOKEN, "|", line, startColumn);
+		case '^':
+			return Token(TokenType::BIT_XOR_TOKEN, "^", line, startColumn);
+		case '~':
+			return Token(TokenType::BIT_NOT_TOKEN, "~", line, startColumn);
+		case '(':
+			return Token(TokenType::LEFT_PAREN_TOKEN, "(", line, startColumn);
+		case ')':
+			return Token(TokenType::RIGHT_PAREN_TOKEN, ")", line, startColumn);
+		case '{':
+			return Token(TokenType::LEFT_BRACE_TOKEN, "{", line, startColumn);
+		case '}':
+			return Token(TokenType::RIGHT_BRACE_TOKEN, "}", line, startColumn);
+		case '[':
+			return Token(TokenType::LEFT_BRACKET_TOKEN, "[", line, startColumn);
+		case ']':
+			return Token(TokenType::RIGHT_BRACKET_TOKEN, "]", line, startColumn);
+		case ';':
+			return Token(TokenType::SEMICOLON_TOKEN, ";", line, startColumn);
+		case ':':
+			return Token(TokenType::COLON_TOKEN, ":", line, startColumn);
+		case ',':
+			return Token(TokenType::COMMA_TOKEN, ",", line, startColumn);
+		case '.':
+			return Token(TokenType::DOT_TOKEN, ".", line, startColumn);
+		default:
+			return Token(TokenType::UNKNOWN_TOKEN, std::string(1, c), line, startColumn);
 	}
 }
 
@@ -303,11 +400,14 @@ Token Lexer::parseNumber() {
 	}
 
 	// Decimal and floating-point
-	while (std::isdigit(static_cast<unsigned char>(current())) || current() == '.' || current() == 'e' || current() == 'E') {
+	while (std::isdigit(static_cast<unsigned char>(current())) || current() == '.' || current() == 'e'
+		   || current() == 'E') {
 		if (current() == '.') {
 			// Check if this is a range operator (..)
-			if (peek() == '.') break;
-			if (isFloat) break;
+			if (peek() == '.')
+				break;
+			if (isFloat)
+				break;
 			isFloat = true;
 			numberStr += '.';
 			advance();
@@ -357,24 +457,40 @@ Token Lexer::parseIdentifierOrKeyword() {
 Token Lexer::parseString() {
 	int startColumn = column;
 	std::string str;
-	advance(); // consume opening "
+	advance();	// consume opening "
 
 	while (position < source.size() && current() != '"') {
 		if (current() == '\\') {
-			advance(); // consume backslash
+			advance();	// consume backslash
 			switch (current()) {
-				case 'n': str += '\n'; break;
-				case 't': str += '\t'; break;
-				case '\\': str += '\\'; break;
-				case '"': str += '"'; break;
-				case '0': str += '\0'; break;
-				case '{': str += '{'; break;  // escaped brace — not interpolation
-				case '}': str += '}'; break;
-				default: str += current(); break;
+				case 'n':
+					str += '\n';
+					break;
+				case 't':
+					str += '\t';
+					break;
+				case '\\':
+					str += '\\';
+					break;
+				case '"':
+					str += '"';
+					break;
+				case '0':
+					str += '\0';
+					break;
+				case '{':
+					str += '{';
+					break;	// escaped brace — not interpolation
+				case '}':
+					str += '}';
+					break;
+				default:
+					str += current();
+					break;
 			}
 		} else if (current() == '{') {
 			// Start of string interpolation
-			advance(); // consume '{'
+			advance();	// consume '{'
 			inInterpolation = true;
 			interpBraceDepth = 0;
 			return Token(TokenType::INTERP_STRING_START_TOKEN, str, line, startColumn);
@@ -385,7 +501,7 @@ Token Lexer::parseString() {
 	}
 
 	if (current() == '"') {
-		advance(); // consume closing "
+		advance();	// consume closing "
 	}
 
 	return Token(TokenType::STRING_LITERAL_TOKEN, str, line, startColumn);
@@ -393,25 +509,41 @@ Token Lexer::parseString() {
 
 Token Lexer::continueInterpolatedString() {
 	int startColumn = column;
-	advance(); // consume the closing '}'
+	advance();	// consume the closing '}'
 	std::string str;
 
 	while (position < source.size() && current() != '"') {
 		if (current() == '\\') {
-			advance(); // consume backslash
+			advance();	// consume backslash
 			switch (current()) {
-				case 'n': str += '\n'; break;
-				case 't': str += '\t'; break;
-				case '\\': str += '\\'; break;
-				case '"': str += '"'; break;
-				case '0': str += '\0'; break;
-				case '{': str += '{'; break;
-				case '}': str += '}'; break;
-				default: str += current(); break;
+				case 'n':
+					str += '\n';
+					break;
+				case 't':
+					str += '\t';
+					break;
+				case '\\':
+					str += '\\';
+					break;
+				case '"':
+					str += '"';
+					break;
+				case '0':
+					str += '\0';
+					break;
+				case '{':
+					str += '{';
+					break;
+				case '}':
+					str += '}';
+					break;
+				default:
+					str += current();
+					break;
 			}
 			advance();
 		} else if (current() == '{') {
-			advance(); // consume '{'
+			advance();	// consume '{'
 			interpBraceDepth = 0;
 			return Token(TokenType::INTERP_STRING_MID_TOKEN, str, line, startColumn);
 		} else {
@@ -421,7 +553,7 @@ Token Lexer::continueInterpolatedString() {
 	}
 
 	if (current() == '"') {
-		advance(); // consume closing "
+		advance();	// consume closing "
 	}
 
 	inInterpolation = false;
@@ -431,17 +563,29 @@ Token Lexer::continueInterpolatedString() {
 Token Lexer::parseCharLiteral() {
 	int startColumn = column;
 	std::string ch;
-	advance(); // consume opening '
+	advance();	// consume opening '
 
 	if (current() == '\\') {
 		advance();
 		switch (current()) {
-			case 'n': ch += '\n'; break;
-			case 't': ch += '\t'; break;
-			case '\\': ch += '\\'; break;
-			case '\'': ch += '\''; break;
-			case '0': ch += '\0'; break;
-			default: ch += current(); break;
+			case 'n':
+				ch += '\n';
+				break;
+			case 't':
+				ch += '\t';
+				break;
+			case '\\':
+				ch += '\\';
+				break;
+			case '\'':
+				ch += '\'';
+				break;
+			case '0':
+				ch += '\0';
+				break;
+			default:
+				ch += current();
+				break;
 		}
 	} else {
 		ch += current();
@@ -449,7 +593,7 @@ Token Lexer::parseCharLiteral() {
 	advance();
 
 	if (current() == '\'') {
-		advance(); // consume closing '
+		advance();	// consume closing '
 	}
 
 	return Token(TokenType::CHAR_LITERAL_TOKEN, ch, line, startColumn);

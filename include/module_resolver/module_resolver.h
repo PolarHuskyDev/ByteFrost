@@ -28,7 +28,9 @@ class ModuleResolver {
 	/// Return all known module paths in discovery order.
 	const std::vector<std::string>& allModulePaths() const;
 
-	const std::string& srcRoot() const { return srcRoot_; }
+	const std::string& srcRoot() const {
+		return srcRoot_;
+	}
 
    private:
 	/// Recursively walk dir, building entries under the given module prefix.

@@ -1,5 +1,7 @@
 #include "linker/linker.h"
 
+#ifndef _WIN32
+
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/Program.h>
 #include <llvm/Support/raw_ostream.h>
@@ -16,24 +18,20 @@ void Linker::link(const Config& config) {
 	std::string linkerPath = findLinker();
 
 	// Resolve emulation string: use config if provided, else auto-detect.
-	std::string emulation = config.linkerEmulation.empty()
-	    ? detectLinkerEmulation()
-	    : config.linkerEmulation;
+	std::string emulation = config.linkerEmulation.empty() ? detectLinkerEmulation() : config.linkerEmulation;
 
 	// Resolve dynamic linker path: use config if provided, else detect from emulation.
-	std::string dynLinker = config.dynamicLinker.empty()
-	    ? findDynamicLinker(emulation)
-	    : config.dynamicLinker;
+	std::string dynLinker = config.dynamicLinker.empty() ? findDynamicLinker(emulation) : config.dynamicLinker;
 
 	std::vector<std::string> gccLibPaths = detectGCCLibPaths();
 	std::vector<std::string> sysLibPaths = detectSystemLibPaths(emulation);
 
 	// Locate CRT objects.
-	std::string scrt1    = findCRTObject("Scrt1.o",    config.crtSearchPaths);
-	std::string crti     = findCRTObject("crti.o",     config.crtSearchPaths);
-	std::string crtn     = findCRTObject("crtn.o",     config.crtSearchPaths);
+	std::string scrt1 = findCRTObject("Scrt1.o", config.crtSearchPaths);
+	std::string crti = findCRTObject("crti.o", config.crtSearchPaths);
+	std::string crtn = findCRTObject("crtn.o", config.crtSearchPaths);
 	std::string crtbegin = findCRTObject("crtbeginS.o", config.crtSearchPaths);
-	std::string crtend   = findCRTObject("crtendS.o",  config.crtSearchPaths);
+	std::string crtend = findCRTObject("crtendS.o", config.crtSearchPaths);
 
 	// Build the linker command line, mirroring what clang would produce.
 	std::vector<std::string> args;
@@ -58,7 +56,8 @@ void Linker::link(const Config& config) {
 	// CRT prologue.
 	args.push_back(scrt1);
 	args.push_back(crti);
-	if (!crtbegin.empty()) args.push_back(crtbegin);
+	if (!crtbegin.empty())
+		args.push_back(crtbegin);
 
 	// Library search paths.
 	for (const auto& p : gccLibPaths) {
@@ -96,7 +95,8 @@ void Linker::link(const Config& config) {
 	args.push_back("--no-as-needed");
 
 	// CRT epilogue.
-	if (!crtend.empty()) args.push_back(crtend);
+	if (!crtend.empty())
+		args.push_back(crtend);
 	args.push_back(crtn);
 
 	// Convert to SmallVector<StringRef> for LLVM API.
@@ -107,18 +107,18 @@ void Linker::link(const Config& config) {
 
 	// Execute the linker.
 	std::string errMsg;
-	int rc = llvm::sys::ExecuteAndWait(
-		linkerPath,
-		argsRef,
-		/*Env=*/std::nullopt,
-		/*Redirects=*/{},
-		/*SecondsToWait=*/60,
-		/*MemoryLimit=*/0,
-		&errMsg);
+	int rc = llvm::sys::ExecuteAndWait(linkerPath,
+									   argsRef,
+									   /*Env=*/std::nullopt,
+									   /*Redirects=*/{},
+									   /*SecondsToWait=*/60,
+									   /*MemoryLimit=*/0,
+									   &errMsg);
 
 	if (rc != 0) {
 		std::string msg = "Linking failed (exit code " + std::to_string(rc) + ")";
-		if (!errMsg.empty()) msg += ": " + errMsg;
+		if (!errMsg.empty())
+			msg += ": " + errMsg;
 		throw LinkerError(msg);
 	}
 }
@@ -128,14 +128,15 @@ void Linker::link(const Config& config) {
 // ==========================
 
 std::string Linker::findLinker() {
-	// Prefer ld.lld, fall back to system ld.
 	auto lld = llvm::sys::findProgramByName("ld.lld");
-	if (lld) return lld.get();
+	if (lld)
+		return lld.get();
 
-	auto ld = llvm::sys::findProgramByName("ld");
-	if (ld) return ld.get();
-
-	throw LinkerError("Could not find ld.lld or ld in PATH");
+	throw LinkerError(
+		"ld.lld not found in PATH. ByteFrost requires LLD to link programs.\n"
+		"  Linux:   sudo apt install lld\n"
+		"  Windows: winget install LLVM.LLVM\n"
+		"See https://lld.llvm.org for more information.");
 }
 
 // ==========================
@@ -147,7 +148,8 @@ static std::string captureCommand(const std::string& cmd) {
 	std::array<char, 512> buffer;
 	std::string result;
 	FILE* pipe = popen(cmd.c_str(), "r");
-	if (!pipe) return "";
+	if (!pipe)
+		return "";
 	while (fgets(buffer.data(), buffer.size(), pipe)) {
 		result += buffer.data();
 	}
@@ -159,8 +161,7 @@ static std::string captureCommand(const std::string& cmd) {
 	return result;
 }
 
-std::string Linker::findCRTObject(const std::string& name,
-                                   const std::vector<std::string>& extraSearchPaths) {
+std::string Linker::findCRTObject(const std::string& name, const std::vector<std::string>& extraSearchPaths) {
 	// Strategy 1: Ask GCC.
 	std::string path = captureCommand("gcc -print-file-name=" + name + " 2>/dev/null");
 	if (!path.empty() && path != name && llvm::sys::fs::exists(path)) {
@@ -170,7 +171,8 @@ std::string Linker::findCRTObject(const std::string& name,
 	// Strategy 2: Caller-supplied paths first.
 	for (const auto& dir : extraSearchPaths) {
 		std::string candidate = dir + "/" + name;
-		if (llvm::sys::fs::exists(candidate)) return candidate;
+		if (llvm::sys::fs::exists(candidate))
+			return candidate;
 	}
 
 	// Strategy 3: Well-known paths.
@@ -189,13 +191,15 @@ std::string Linker::findCRTObject(const std::string& name,
 		auto gccPaths = detectGCCLibPaths();
 		for (const auto& dir : gccPaths) {
 			std::string candidate = dir + "/" + name;
-			if (llvm::sys::fs::exists(candidate)) return candidate;
+			if (llvm::sys::fs::exists(candidate))
+				return candidate;
 		}
 	}
 
 	for (const auto& dir : searchPaths) {
 		std::string candidate = dir + "/" + name;
-		if (llvm::sys::fs::exists(candidate)) return candidate;
+		if (llvm::sys::fs::exists(candidate))
+			return candidate;
 	}
 
 	// crtbegin/crtend are optional (not strictly required for simple programs).
@@ -242,7 +246,8 @@ std::string Linker::findDynamicLinker(const std::string& linkerEmulation) {
 	}
 
 	for (const auto& p : candidates) {
-		if (llvm::sys::fs::exists(p)) return p;
+		if (llvm::sys::fs::exists(p))
+			return p;
 	}
 
 	throw LinkerError("Could not find dynamic linker for emulation: " + linkerEmulation);
@@ -256,11 +261,14 @@ std::string Linker::detectLinkerEmulation() {
 		return (sizeof(void*) == 8) ? "elf_x86_64" : "elf_i386";
 	}
 
-	if (triple.find("x86_64") != std::string::npos)  return "elf_x86_64";
-	if (triple.find("i386") != std::string::npos ||
-	    triple.find("i686") != std::string::npos)     return "elf_i386";
-	if (triple.find("aarch64") != std::string::npos) return "aarch64linux";
-	if (triple.find("arm") != std::string::npos)     return "armelf_linux_eabi";
+	if (triple.find("x86_64") != std::string::npos)
+		return "elf_x86_64";
+	if (triple.find("i386") != std::string::npos || triple.find("i686") != std::string::npos)
+		return "elf_i386";
+	if (triple.find("aarch64") != std::string::npos)
+		return "aarch64linux";
+	if (triple.find("arm") != std::string::npos)
+		return "armelf_linux_eabi";
 
 	// Unknown — return empty; caller will throw or handle gracefully.
 	throw LinkerError("Could not determine linker emulation for target triple: " + triple);
@@ -272,9 +280,10 @@ std::vector<std::string> Linker::detectGCCLibPaths() {
 
 	// Parse the "libraries: =..." line.
 	auto pos = output.find("libraries: =");
-	if (pos == std::string::npos) return paths;
+	if (pos == std::string::npos)
+		return paths;
 
-	std::string libs = output.substr(pos + 12);  // skip "libraries: ="
+	std::string libs = output.substr(pos + 12);	 // skip "libraries: ="
 	// Split on ':'
 	std::istringstream ss(libs);
 	std::string dir;
@@ -324,3 +333,22 @@ std::vector<std::string> Linker::detectSystemLibPaths(const std::string& linkerE
 	}
 	return paths;
 }
+
+#else  // _WIN32
+
+// ELF linking is not supported on Windows. All methods throw so that the
+// compiler front-ends can surface a clear error message at runtime.
+
+void Linker::link(const Config&) {
+	throw LinkerError("Native ELF linking is not supported on Windows. "
+					  "Cross-compile from a Linux host or use WSL.");
+}
+
+std::string Linker::findLinker() { return ""; }
+std::string Linker::findCRTObject(const std::string&, const std::vector<std::string>&) { return ""; }
+std::string Linker::findDynamicLinker(const std::string&) { return ""; }
+std::string Linker::detectLinkerEmulation() { return ""; }
+std::vector<std::string> Linker::detectGCCLibPaths() { return {}; }
+std::vector<std::string> Linker::detectSystemLibPaths(const std::string&) { return {}; }
+
+#endif  // _WIN32

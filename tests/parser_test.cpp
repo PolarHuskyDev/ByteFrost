@@ -1,7 +1,8 @@
+#include "parser/parser.h"
+
 #include <gtest/gtest.h>
 
 #include "parser/ast.h"
-#include "parser/parser.h"
 #include "tokenizer/lexer.h"
 
 // Helper: lex + parse
@@ -508,7 +509,7 @@ main(): int {
 	auto& stmts = program.functions[0]->body.statements;
 	ASSERT_EQ(stmts.size(), 5u);
 
-	// && 
+	// &&
 	auto* ifAnd = dynamic_cast<IfStmt*>(stmts[0].get());
 	ASSERT_NE(ifAnd, nullptr);
 	auto* binAnd = dynamic_cast<BinaryExpr*>(ifAnd->condition.get());
@@ -962,7 +963,8 @@ main(): int { return 0; }
 	// Two field members
 	int fieldCount = 0;
 	for (const auto& m : program.structs[0]->members) {
-		if (m.kind == StructMember::FIELD) fieldCount++;
+		if (m.kind == StructMember::FIELD)
+			fieldCount++;
 	}
 	EXPECT_EQ(fieldCount, 2);
 }
@@ -980,7 +982,8 @@ main(): int { return 0; }
 	ASSERT_EQ(program.structs.size(), 1u);
 	int methodCount = 0;
 	for (const auto& m : program.structs[0]->members) {
-		if (m.kind == StructMember::METHOD) methodCount++;
+		if (m.kind == StructMember::METHOD)
+			methodCount++;
 	}
 	EXPECT_EQ(methodCount, 1);
 }
@@ -1047,7 +1050,8 @@ main(): int { return 0; }
 	ASSERT_EQ(program.structs.size(), 1u);
 	int methodCount = 0;
 	for (const auto& m : program.structs[0]->members) {
-		if (m.kind == StructMember::METHOD && m.method->name == "constructor") methodCount++;
+		if (m.kind == StructMember::METHOD && m.method->name == "constructor")
+			methodCount++;
 	}
 	EXPECT_EQ(methodCount, 1);
 }

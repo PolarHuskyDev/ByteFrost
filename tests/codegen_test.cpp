@@ -1,3 +1,5 @@
+#include "codegen/codegen.h"
+
 #include <gtest/gtest.h>
 
 #include <cstdio>
@@ -5,7 +7,6 @@
 #include <string>
 #include <vector>
 
-#include "codegen/codegen.h"
 #include "parser/parser.h"
 #include "tokenizer/lexer.h"
 
@@ -21,9 +22,8 @@ static std::string compileToIR(const std::string& source) {
 
 // Helper: verify IR contains a substring.
 static void assertIRContains(const std::string& ir, const std::string& expected) {
-	ASSERT_NE(ir.find(expected), std::string::npos)
-		<< "Expected IR to contain: " << expected << "\n\nActual IR:\n"
-		<< ir;
+	ASSERT_NE(ir.find(expected), std::string::npos) << "Expected IR to contain: " << expected << "\n\nActual IR:\n"
+													<< ir;
 }
 
 // =====================
@@ -910,15 +910,17 @@ TEST(CodeGenRefCount, MultipleContainersCleanup) {
 // ============================================================
 
 TEST(CodeGenStructErrors, DirectSelfReferenceRejected) {
-	EXPECT_THROW({
-		compileToIR(R"(
+	EXPECT_THROW(
+		{
+			compileToIR(R"(
 			struct Node {
 				value: int;
 				next: Node;
 			}
 			main(): int { return 0; }
 		)");
-	}, CodeGenError);
+		},
+		CodeGenError);
 }
 
 TEST(CodeGenStructErrors, DirectSelfReferenceErrorMessage) {
@@ -940,13 +942,15 @@ TEST(CodeGenStructErrors, DirectSelfReferenceErrorMessage) {
 }
 
 TEST(CodeGenStructErrors, IndirectCycleRejected) {
-	EXPECT_THROW({
-		compileToIR(R"(
+	EXPECT_THROW(
+		{
+			compileToIR(R"(
 			struct A { b: B; }
 			struct B { a: A; }
 			main(): int { return 0; }
 		)");
-	}, CodeGenError);
+		},
+		CodeGenError);
 }
 
 TEST(CodeGenStructErrors, IndirectCycleErrorMessage) {
@@ -1047,7 +1051,8 @@ TEST(CodeGenOptLevel, O0AndO2ProduceDifferentObjectFiles) {
 
 	auto fileSize = [](const std::string& path) -> std::streamsize {
 		std::ifstream f(path, std::ios::binary | std::ios::ate);
-		if (!f.is_open()) return std::streamsize(-1);
+		if (!f.is_open())
+			return std::streamsize(-1);
 		return static_cast<std::streamsize>(f.tellg());
 	};
 
@@ -1069,8 +1074,7 @@ TEST(CodeGenOptLevel, O0AndO2ProduceDifferentObjectFiles) {
 	auto sz2 = fileSize(o2Path);
 	EXPECT_GT(sz0, 0) << "O0 object file is empty";
 	EXPECT_GT(sz2, 0) << "O2 object file is empty";
-	EXPECT_NE(sz0, sz2)
-		<< "O0 and O2 should produce different object files (PassBuilder must have run)";
+	EXPECT_NE(sz0, sz2) << "O0 and O2 should produce different object files (PassBuilder must have run)";
 
 	std::remove(o0Path.c_str());
 	std::remove(o2Path.c_str());
@@ -1227,10 +1231,7 @@ f(b: int, e: int): float { return pow(b, e); }
 
 TEST(CodeGenStdlibConflict, ThrowsOnSinWithoutOverridden) {
 	// Defining 'sin' without 'overridden' must throw a CodeGenError.
-	EXPECT_THROW(
-		compileToIR("sin(x: float): float { return x; }"),
-		CodeGenError
-	);
+	EXPECT_THROW(compileToIR("sin(x: float): float { return x; }"), CodeGenError);
 }
 
 TEST(CodeGenStdlibConflict, ErrorMentionsOverridden) {
@@ -1244,17 +1245,11 @@ TEST(CodeGenStdlibConflict, ErrorMentionsOverridden) {
 }
 
 TEST(CodeGenStdlibConflict, ThrowsOnCosWithoutOverridden) {
-	EXPECT_THROW(
-		compileToIR("cos(x: float): float { return x; }"),
-		CodeGenError
-	);
+	EXPECT_THROW(compileToIR("cos(x: float): float { return x; }"), CodeGenError);
 }
 
 TEST(CodeGenStdlibConflict, ThrowsOnAbsWithoutOverridden) {
-	EXPECT_THROW(
-		compileToIR("abs(x: float): float { return x; }"),
-		CodeGenError
-	);
+	EXPECT_THROW(compileToIR("abs(x: float): float { return x; }"), CodeGenError);
 }
 
 TEST(CodeGenStdlibConflict, FirstConflictReported) {

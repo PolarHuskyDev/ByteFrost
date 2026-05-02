@@ -19,12 +19,12 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Target/TargetMachine.h"
-
 #include "parser/ast.h"
 
 class CodeGenError : public std::runtime_error {
    public:
-	CodeGenError(const std::string& msg) : std::runtime_error(msg) {}
+	CodeGenError(const std::string& msg) : std::runtime_error(msg) {
+	}
 };
 
 class CodeGen {
@@ -33,7 +33,9 @@ class CodeGen {
 
 	/// Optimization level — mirrors Rust/Cargo opt-level (0/1/2/3/"s"/"z").
 	enum class OptLevel { O0, O1, O2, O3, Os, Oz };
-	void setOptLevel(OptLevel level) { optLevel_ = level; }
+	void setOptLevel(OptLevel level) {
+		optLevel_ = level;
+	}
 
 	/// Generate LLVM IR for the entire program. Returns the IR as a string.
 	std::string generate(const Program& program);
@@ -46,8 +48,12 @@ class CodeGen {
 	void declareExternFunction(const FunctionDecl& fn);
 
 	/// Access the module (for unit testing).
-	llvm::Module& getModule() { return *module; }
-	llvm::LLVMContext& getContext() { return *context; }
+	llvm::Module& getModule() {
+		return *module;
+	}
+	llvm::LLVMContext& getContext() {
+		return *context;
+	}
 
    private:
 	std::unique_ptr<llvm::LLVMContext> context;
@@ -60,8 +66,8 @@ class CodeGen {
 	struct Scope {
 		std::map<std::string, llvm::AllocaInst*> variables;
 		std::map<std::string, llvm::Type*> varTypes;
-		std::map<std::string, std::string> varBFTypeNames;  // ByteFrost type name ("Person", "array", "map", etc.)
-		std::vector<std::string> heapOwned;  // names of vars that own heap data (need cleanup)
+		std::map<std::string, std::string> varBFTypeNames;	// ByteFrost type name ("Person", "array", "map", etc.)
+		std::vector<std::string> heapOwned;					// names of vars that own heap data (need cleanup)
 	};
 	std::vector<Scope> scopes;
 
@@ -94,7 +100,7 @@ class CodeGen {
 		std::vector<std::string> fieldNames;
 		std::vector<llvm::Type*> fieldLLVMTypes;
 		std::map<std::string, size_t> fieldIndices;
-		std::map<std::string, std::string> methods;  // method name -> mangled LLVM function name
+		std::map<std::string, std::string> methods;	 // method name -> mangled LLVM function name
 		bool hasConstructor = false;
 	};
 	std::map<std::string, StructInfo> structRegistry;
@@ -134,8 +140,7 @@ class CodeGen {
 	// Struct support.
 	void registerStructTypes(const Program& program);
 	void generateStructMethods(const Program& program);
-	void generateStructInit(const StructInitExpr& expr, llvm::Value* basePtr,
-							const std::string& structName);
+	void generateStructInit(const StructInitExpr& expr, llvm::Value* basePtr, const std::string& structName);
 	std::pair<llvm::Value*, std::string> resolveStructBase(const Expression& expr);
 
 	// Array support.
@@ -147,10 +152,10 @@ class CodeGen {
 	// Map support.
 	llvm::StructType* getOrCreateMapType(llvm::Type* keyType, llvm::Type* valType);
 	llvm::Value* generateEmptyMap(llvm::Type* keyType, llvm::Type* valType);
-	void generateMapSet(llvm::AllocaInst* mapAlloca, llvm::Type* keyType, llvm::Type* valType,
-						llvm::Value* key, llvm::Value* val);
-	llvm::Value* generateMapGet(llvm::AllocaInst* mapAlloca, llvm::Type* keyType, llvm::Type* valType,
-								llvm::Value* key);
+	void generateMapSet(
+		llvm::AllocaInst* mapAlloca, llvm::Type* keyType, llvm::Type* valType, llvm::Value* key, llvm::Value* val);
+	llvm::Value*
+	generateMapGet(llvm::AllocaInst* mapAlloca, llvm::Type* keyType, llvm::Type* valType, llvm::Value* key);
 
 	// Built-in print handling.
 	llvm::Value* generatePrintCall(const std::vector<ExprPtr>& args);
@@ -165,9 +170,7 @@ class CodeGen {
 
 	// Helpers.
 	void declareBuiltins();
-	llvm::AllocaInst* createEntryBlockAlloca(llvm::Function* fn,
-											 const std::string& name,
-											 llvm::Type* type);
+	llvm::AllocaInst* createEntryBlockAlloca(llvm::Function* fn, const std::string& name, llvm::Type* type);
 	llvm::AllocaInst* lookupVariable(const std::string& name);
 	llvm::Type* lookupVarType(const std::string& name);
 	std::string lookupVarBFTypeName(const std::string& name);
@@ -176,8 +179,10 @@ class CodeGen {
 	void emitScopeCleanup();  // emit ref decrements / frees for current scope
 	void emitRefIncrement(llvm::Value* structAlloca, bool isMap);
 	void emitRefDecrement(llvm::Value* structAlloca, bool isMap);
-	void declareVariable(const std::string& name, llvm::AllocaInst* alloca,
-						 llvm::Type* type, const std::string& bfTypeName = "");
+	void declareVariable(const std::string& name,
+						 llvm::AllocaInst* alloca,
+						 llvm::Type* type,
+						 const std::string& bfTypeName = "");
 
 	/// Get a store-able pointer for an lvalue expression (for assignment).
 	llvm::Value* generateLValue(const Expression& expr);
