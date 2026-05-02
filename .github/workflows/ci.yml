@@ -15,8 +15,12 @@ jobs:
         include:
           - os: ubuntu-22.04
             name: Linux
+            cmake_preset: conan-release
+            bin_dir: build/Release
           - os: windows-latest
             name: Windows
+            cmake_preset: conan-default
+            bin_dir: build/Release/Release
 
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.name }}
@@ -43,7 +47,7 @@ jobs:
 
       - name: Install system tools (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get install -y ninja-build lld
+        run: sudo apt-get update -y && sudo apt-get install -y lld
 
       - name: Set up MSVC (Windows)
         if: runner.os == 'Windows'
@@ -64,17 +68,17 @@ jobs:
       - name: Configure
         shell: bash
         run: |
-          cmake --preset conan-release \
+          cmake --preset ${{ matrix.cmake_preset }} \
             -DBF_VERSION=0.0.0-dev \
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
 
       - name: Build
         shell: bash
-        run: cmake --build build/Release
+        run: cmake --build --preset ${{ matrix.cmake_preset }}
 
       - name: Run unit tests
         shell: bash
-        run: ./build/Release/unit_tests
+        run: ./${{ matrix.bin_dir }}/unit_tests
 
       - name: Run E2E tests (Linux only)
         if: runner.os == 'Linux'

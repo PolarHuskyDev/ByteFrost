@@ -19,8 +19,12 @@ jobs:
         include:
           - os: ubuntu-22.04
             name: Linux
+            cmake_preset: conan-release
+            bin_dir: build/Release
           - os: windows-latest
             name: Windows
+            cmake_preset: conan-default
+            bin_dir: build/Release/Release
 
     runs-on: ${{ matrix.os }}
     name: Build (${{ matrix.name }})
@@ -56,7 +60,7 @@ jobs:
       # ── Linux ────────────────────────────────────────────────────────────────
       - name: Install system tools (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get install -y ninja-build lld
+        run: sudo apt-get update -y && sudo apt-get install -y lld
 
       # ── Windows ──────────────────────────────────────────────────────────────
       - name: Set up MSVC (Windows)
@@ -78,21 +82,21 @@ jobs:
       - name: Configure (Linux)
         if: runner.os == 'Linux'
         run: |
-          cmake --preset conan-release \
+          cmake --preset ${{ matrix.cmake_preset }} \
             -DBF_VERSION="$BF_VERSION" \
             -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
 
       - name: Build (Linux)
         if: runner.os == 'Linux'
-        run: cmake --build build/Release --target byte_frost orca
+        run: cmake --build --preset ${{ matrix.cmake_preset }} --target byte_frost orca
 
       - name: Strip binaries (Linux)
         if: runner.os == 'Linux'
-        run: strip --strip-all build/Release/byte_frost build/Release/orca
+        run: strip --strip-all ${{ matrix.bin_dir }}/byte_frost ${{ matrix.bin_dir }}/orca
 
       - name: Run unit tests (Linux)
         if: runner.os == 'Linux'
-        run: ./build/Release/unit_tests
+        run: ./${{ matrix.bin_dir }}/unit_tests
 
       - name: Run E2E tests (Linux)
         if: runner.os == 'Linux'
@@ -103,7 +107,7 @@ jobs:
         run: |
           ARCHIVE_NAME="bytefrost-v${BF_VERSION}-linux-x86_64"
           mkdir -p "dist/${ARCHIVE_NAME}/bin"
-          cp build/Release/byte_frost build/Release/orca "dist/${ARCHIVE_NAME}/bin/"
+          cp ${{ matrix.bin_dir }}/byte_frost ${{ matrix.bin_dir }}/orca "dist/${ARCHIVE_NAME}/bin/"
           cp README.md LICENSE "dist/${ARCHIVE_NAME}/"
           tar -czf "${ARCHIVE_NAME}.tar.gz" -C dist "${ARCHIVE_NAME}"
           sha256sum "${ARCHIVE_NAME}.tar.gz" > SHA256SUMS
@@ -113,19 +117,19 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          cmake --preset conan-release \
+          cmake --preset ${{ matrix.cmake_preset }} \
             "-DBF_VERSION=$BF_VERSION" \
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: cmake --build build/Release --target byte_frost orca
+        run: cmake --build --preset ${{ matrix.cmake_preset }} --target byte_frost orca --config Release
 
       - name: Run unit tests (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: ./build/Release/unit_tests.exe
+        run: ./${{ matrix.bin_dir }}/unit_tests.exe
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -133,7 +137,7 @@ jobs:
         run: |
           $archiveName = "bytefrost-v$env:BF_VERSION-windows-x86_64"
           New-Item -ItemType Directory -Force -Path "dist\$archiveName\bin"
-          Copy-Item build\Release\byte_frost.exe, build\Release\orca.exe `
+          Copy-Item "${{ matrix.bin_dir }}\byte_frost.exe", "${{ matrix.bin_dir }}\orca.exe" `
             -Destination "dist\$archiveName\bin\"
           Copy-Item README.md, LICENSE -Destination "dist\$archiveName\"
           Compress-Archive -Path "dist\$archiveName" `
