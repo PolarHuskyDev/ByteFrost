@@ -70,8 +70,7 @@ jobs:
         shell: bash
         run: |
           cmake --preset ${{ matrix.configure_preset }} \
-            -DBF_VERSION=0.0.0-dev \
-            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+            -DBF_VERSION=0.0.0-dev
 
       - name: Build
         shell: bash
