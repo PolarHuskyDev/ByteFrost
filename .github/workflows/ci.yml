@@ -51,11 +51,27 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update -y && sudo apt-get install -y lld
 
-      - name: Set up MSVC (Windows)
+      - name: Set up MinGW Conan profile (Windows)
         if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
+        shell: bash
+        run: |
+          mkdir -p ~/.conan2/profiles
+          cat > ~/.conan2/profiles/default << 'EOF'
+          [settings]
+          arch=x86_64
+          build_type=Release
+          compiler=gcc
+          compiler.cppstd=gnu17
+          compiler.libcxx=libstdc++11
+          compiler.version=13
+          os=Windows
 
-      - name: Detect Conan profile
+          [conf]
+          tools.build:compiler_executables={"c": "C:/mingw64/bin/gcc.exe", "cpp": "C:/mingw64/bin/g++.exe"}
+          EOF
+
+      - name: Detect Conan profile (Linux)
+        if: runner.os == 'Linux'
         run: conan profile detect --force
 
       - name: Install dependencies
@@ -66,12 +82,21 @@ jobs:
             --settings build_type=Release \
             --settings compiler.cppstd=17
 
-      - name: Configure
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cmake --preset ${{ matrix.configure_preset }} \
+            -DBF_VERSION=0.0.0-dev
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
         shell: bash
         run: |
           cmake --preset ${{ matrix.configure_preset }} \
             -DBF_VERSION=0.0.0-dev \
-            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+            -DCMAKE_C_COMPILER=C:/mingw64/bin/gcc.exe \
+            -DCMAKE_CXX_COMPILER=C:/mingw64/bin/g++.exe
 
       - name: Build
         shell: bash
