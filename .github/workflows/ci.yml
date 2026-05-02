@@ -70,7 +70,8 @@ jobs:
         shell: bash
         run: |
           cmake --preset ${{ matrix.configure_preset }} \
-            -DBF_VERSION=0.0.0-dev
+            -DBF_VERSION=0.0.0-dev \
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
 
       - name: Build
         shell: bash
@@ -80,6 +81,6 @@ jobs:
         shell: bash
         run: ctest --test-dir ${{ matrix.bin_dir }} -C Release --output-on-failure
 
-      - name: Run E2E tests (Linux only)
-        if: runner.os == 'Linux'
+      - name: Run E2E tests
+        shell: bash
         run: bash scripts/test_compiled.sh
