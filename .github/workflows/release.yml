@@ -22,11 +22,13 @@ jobs:
             configure_preset: conan-release
             build_preset: conan-release
             bin_dir: build/Release
+            unit_tests_bin: build/Release/unit_tests
           - os: windows-latest
             name: Windows
             configure_preset: conan-default
             build_preset: conan-release
             bin_dir: build/Release
+            unit_tests_bin: build/Release/unit_tests.exe
 
     runs-on: ${{ matrix.os }}
     name: Build (${{ matrix.name }})
@@ -85,11 +87,15 @@ jobs:
 
       - name: Build (Linux)
         if: runner.os == 'Linux'
-        run: cmake --build --preset ${{ matrix.build_preset }} --target byte_frost orca
+        run: cmake --build --preset ${{ matrix.build_preset }} --target byte_frost orca unit_tests
 
       - name: Strip binaries (Linux)
         if: runner.os == 'Linux'
         run: strip --strip-all ${{ matrix.bin_dir }}/byte_frost ${{ matrix.bin_dir }}/orca
+
+      - name: Run unit tests (Linux)
+        if: runner.os == 'Linux'
+        run: ./${{ matrix.unit_tests_bin }}
 
       - name: Run E2E tests (Linux)
         if: runner.os == 'Linux'
@@ -116,7 +122,17 @@ jobs:
       - name: Build (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: cmake --build --preset ${{ matrix.build_preset }} --target byte_frost orca --config Release
+        run: cmake --build --preset ${{ matrix.build_preset }} --target byte_frost orca unit_tests --config Release
+
+      - name: Run unit tests (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: ./${{ matrix.unit_tests_bin }}
+
+      - name: Run E2E tests (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: bash scripts/test_compiled.sh
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
