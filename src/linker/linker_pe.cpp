@@ -150,33 +150,51 @@ std::string Linker::findMSVCToolsPath(const Config& config) {
 // ==========================
 
 std::string Linker::findLinker() {
-	// Prefer lld-link (LLVM's PE/COFF linker — cross-platform capable).
+	// Strategy 1: Probe the MSVC toolchain directory directly.
+	// This is the most reliable path — it works from any shell (Git Bash,
+	// PowerShell, CMD) without a Developer Command Prompt and without relying
+	// on PATH ordering.
+	{
+		Config empty;
+		std::string msvcTools = findMSVCToolsPath(empty);
+		if (!msvcTools.empty()) {
+			std::string candidate = msvcTools + "\\bin\\Hostx64\\x64\\link.exe";
+			if (llvm::sys::fs::exists(candidate))
+				return candidate;
+		}
+	}
+
+	// Strategy 2: lld-link anywhere in PATH (LLVM's PE/COFF linker).
 	auto lldLink = llvm::sys::findProgramByName("lld-link");
 	if (lldLink)
 		return lldLink.get();
 
-	// Try MSVC link.exe via PATH, but reject the POSIX 'link' utility that
-	// lives at /usr/bin/link in MSYS2 / Git Bash / Cygwin — it creates
-	// hardlinks, not PE/COFF executables.
+	// Strategy 3: link.exe in PATH — but reject POSIX shims.
+	// Git Bash / MSYS2 / Cygwin put a hardlink utility called link.exe in
+	// /usr/bin (or C:\Program Files\Git\usr\bin). We detect it by checking
+	// both POSIX-style and Windows-style paths into those directories.
 	auto linkExe = llvm::sys::findProgramByName("link.exe");
 	if (linkExe) {
-		const std::string& p = linkExe.get();
-		bool looksUnix = p.rfind("/usr/", 0) == 0
-					  || p.rfind("/bin/", 0) == 0
-					  || p.rfind("/mingw", 0) == 0
-					  || p.rfind("/opt/", 0) == 0;
+		std::string p = linkExe.get();
+		// Lowercase copy for case-insensitive substring checks.
+		std::string pl = p;
+		for (auto& c : pl)
+			c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+		bool looksUnix =
+			// POSIX-style paths (e.g. when running natively in MSYS2):
+			pl.rfind("/usr/", 0) == 0 ||
+			pl.rfind("/bin/", 0) == 0 ||
+			pl.rfind("/mingw", 0) == 0 ||
+			pl.rfind("/opt/", 0) == 0 ||
+			// Windows paths into a Git / MSYS2 installation:
+			pl.find("\\git\\usr\\bin\\") != std::string::npos ||
+			pl.find("\\msys64\\usr\\bin\\") != std::string::npos ||
+			pl.find("\\msys32\\usr\\bin\\") != std::string::npos ||
+			pl.find("\\msys2\\usr\\bin\\") != std::string::npos;
+
 		if (!looksUnix)
 			return p;
-	}
-
-	// Last resort: look for link.exe directly inside the MSVC toolchain
-	// directory (works even when the Developer Command Prompt is not active).
-	Config empty;
-	std::string msvcTools = findMSVCToolsPath(empty);
-	if (!msvcTools.empty()) {
-		std::string candidate = msvcTools + "\\bin\\Hostx64\\x64\\link.exe";
-		if (llvm::sys::fs::exists(candidate))
-			return candidate;
 	}
 
 	throw LinkerError(
