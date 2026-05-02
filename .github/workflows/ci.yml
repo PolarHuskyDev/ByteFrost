@@ -65,9 +65,6 @@ jobs:
           compiler.libcxx=libstdc++11
           compiler.version=13
           os=Windows
-
-          [conf]
-          tools.build:compiler_executables={"c": "C:/mingw64/bin/gcc.exe", "cpp": "C:/mingw64/bin/g++.exe"}
           EOF
 
       - name: Detect Conan profile (Linux)
@@ -104,7 +101,7 @@ jobs:
 
       - name: Run unit tests
         shell: bash
-        run: ctest --test-dir ${{ matrix.bin_dir }} -C Release --output-on-failure
+        run: ctest --test-dir ${{ matrix.bin_dir }} -C Release --output-on-failure --no-tests=error
 
       - name: Run E2E tests
         shell: bash
