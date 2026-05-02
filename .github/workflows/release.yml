@@ -19,11 +19,13 @@ jobs:
         include:
           - os: ubuntu-22.04
             name: Linux
-            cmake_preset: conan-release
+            configure_preset: conan-release
+            build_preset: conan-release
             bin_dir: build/Release
           - os: windows-latest
             name: Windows
-            cmake_preset: conan-default
+            configure_preset: conan-default
+            build_preset: conan-release
             bin_dir: build/Release/Release
 
     runs-on: ${{ matrix.os }}
@@ -74,7 +76,6 @@ jobs:
         shell: bash
         run: |
           conan install . \
-            --output-folder=build/Release \
             --build=missing \
             --settings build_type=Release \
             --settings compiler.cppstd=17
@@ -82,13 +83,13 @@ jobs:
       - name: Configure (Linux)
         if: runner.os == 'Linux'
         run: |
-          cmake --preset ${{ matrix.cmake_preset }} \
+          cmake --preset ${{ matrix.configure_preset }} \
             -DBF_VERSION="$BF_VERSION" \
             -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
 
       - name: Build (Linux)
         if: runner.os == 'Linux'
-        run: cmake --build --preset ${{ matrix.cmake_preset }} --target byte_frost orca
+        run: cmake --build --preset ${{ matrix.build_preset }} --target byte_frost orca
 
       - name: Strip binaries (Linux)
         if: runner.os == 'Linux'
@@ -117,14 +118,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          cmake --preset ${{ matrix.cmake_preset }} \
+          cmake --preset ${{ matrix.configure_preset }} \
             "-DBF_VERSION=$BF_VERSION" \
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: cmake --build --preset ${{ matrix.cmake_preset }} --target byte_frost orca --config Release
+        run: cmake --build --preset ${{ matrix.build_preset }} --target byte_frost orca --config Release
 
       - name: Run unit tests (Windows)
         if: runner.os == 'Windows'

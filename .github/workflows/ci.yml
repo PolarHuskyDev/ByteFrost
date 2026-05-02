@@ -15,11 +15,13 @@ jobs:
         include:
           - os: ubuntu-22.04
             name: Linux
-            cmake_preset: conan-release
+            configure_preset: conan-release
+            build_preset: conan-release
             bin_dir: build/Release
           - os: windows-latest
             name: Windows
-            cmake_preset: conan-default
+            configure_preset: conan-default
+            build_preset: conan-release
             bin_dir: build/Release/Release
 
     runs-on: ${{ matrix.os }}
@@ -60,7 +62,6 @@ jobs:
         shell: bash
         run: |
           conan install . \
-            --output-folder=build/Release \
             --build=missing \
             --settings build_type=Release \
             --settings compiler.cppstd=17
@@ -68,13 +69,13 @@ jobs:
       - name: Configure
         shell: bash
         run: |
-          cmake --preset ${{ matrix.cmake_preset }} \
+          cmake --preset ${{ matrix.configure_preset }} \
             -DBF_VERSION=0.0.0-dev \
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
 
       - name: Build
         shell: bash
-        run: cmake --build --preset ${{ matrix.cmake_preset }}
+        run: cmake --build --preset ${{ matrix.build_preset }}
 
       - name: Run unit tests
         shell: bash
