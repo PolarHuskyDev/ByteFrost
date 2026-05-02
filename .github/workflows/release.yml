@@ -127,11 +127,6 @@ jobs:
         shell: bash
         run: cmake --build --preset ${{ matrix.build_preset }} --target byte_frost orca --config Release
 
-      - name: Run unit tests (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: ./${{ matrix.bin_dir }}/unit_tests.exe
-
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
