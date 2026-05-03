@@ -348,6 +348,56 @@ run_orca_clean_test() {
 }
 
 # ---------------------------------------------------------------------------
+# run_orca_smoke_test NAME TOML_PATH STDIN_INPUT [TIMEOUT]
+#   Build an orca project and run the executable with piped STDIN_INPUT.
+#   Only verifies that the build and execution both succeed (exit 0).
+#   Use this for interactive or non-deterministic programs whose output
+#   cannot be compared exactly (e.g. games that use randomness).
+# ---------------------------------------------------------------------------
+run_orca_smoke_test() {
+    local name="$1"
+    local toml_path="$2"
+    local stdin_input="$3"
+    local timeout_secs="${4:-30}"
+
+    TOTAL=$((TOTAL + 1))
+
+    local exe_file="$TMP_DIR/${name}"
+    local orca_bin
+    orca_bin="$(dirname "$COMPILER")/orca"
+
+    if ! "$orca_bin" --project "$toml_path" -o "$exe_file" \
+            2>"$TMP_DIR/${name}.compile_err" 1>/dev/null; then
+        echo -e "  ${RED}FAIL${NC} $name — orca build failed"
+        cat "$TMP_DIR/${name}.compile_err" | sed 's/^/    /'
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    if ! printf '%s' "$stdin_input" | timeout "$timeout_secs" "$exe_file" \
+            >"$TMP_DIR/${name}.out" 2>"$TMP_DIR/${name}.run_err"; then
+        local exit_code=$?
+        if [ $exit_code -eq 124 ]; then
+            echo -e "  ${RED}FAIL${NC} $name — timed out after ${timeout_secs}s"
+        else
+            echo -e "  ${RED}FAIL${NC} $name — runtime error (exit code $exit_code)"
+            cat "$TMP_DIR/${name}.run_err" | sed 's/^/    /'
+        fi
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    if [ "$VERBOSE" = true ]; then
+        echo -e "  --- $name output ---"
+        cat "$TMP_DIR/${name}.out" | tr -d '\r' | sed 's/^/    /'
+        echo -e "  ---"
+    fi
+
+    echo -e "  ${GREEN}PASS${NC} $name"
+    PASS=$((PASS + 1))
+}
+
+# ---------------------------------------------------------------------------
 # run_orca_check_test NAME TOML_PATH EXPECT_PASS [EXPECTED_ERR_SUBSTRING]
 #   Run `orca check --project TOML_PATH`.
 #   If EXPECT_PASS is "pass", verify exit 0.  If "fail", verify exit non-zero.
@@ -436,6 +486,10 @@ run_test "constructor" "$TESTS_DIR/constructor.bf" "Area: 22"
 CONTAINERS_EXPECTED="$(printf '[0, 1, 2, 3, 4, 5]\n[0, 1, 4, 9, 16, 25]\n{200: Ok, 201: Created, 404: Not Found}')"
 run_test "containers" "$TESTS_DIR/containers.bf" "$CONTAINERS_EXPECTED"
 
+# --- enums.bf ---
+# Tests enum declaration, variable assignment, equality comparison, enum param/return.
+run_test "enums" "$TESTS_DIR/enums.bf" "$(printf 'NORTH\nSOUTH\nHeading north\nEAST\nWEST')"
+
 # --- composition.bf ---
 run_test "composition" "$TESTS_DIR/composition.bf" "Circle center: (10, 20), radius: 5.5"
 
@@ -445,6 +499,16 @@ echo "--- Negative Tests ---"
 run_negative_test "trig_function_no_override" \
     "$TESTS_DIR/trig_function.bf" \
     "conflicts with a stdlib math function"
+
+# --- enum_int_assign.bf (negative: assigning integer to enum variable must fail) ---
+run_negative_test "enum_int_assign" \
+    "$TESTS_DIR/enum_int_assign.bf" \
+    "cannot assign integer"
+
+# --- enum_int_compare.bf (negative: comparing enum with integer must fail) ---
+run_negative_test "enum_int_compare" \
+    "$TESTS_DIR/enum_int_compare.bf" \
+    "Enum values can only be compared"
 
 # --- trig_function_overridden.bf (positive: user-defined math with 'overridden') ---
 echo ""
@@ -510,6 +574,15 @@ TOML
 printf 'main(): int { x: int = ; return 0; }\n' > "$TMP_DIR/check_bad/src/main.bf"
 run_orca_check_test "orca_check_invalid" \
     "$TMP_DIR/check_bad/orca.toml" fail "error:"
+
+# --- enums_blackjack: multi-file game with enums, structs, embedded fields, RNG ---
+# Output is non-deterministic (shuffled deck), so we only verify build + clean exit.
+# Input: player name "Alice", stand immediately, then quit.
+echo ""
+echo "--- Interactive / Non-deterministic Tests ---"
+run_orca_smoke_test "blackjack" \
+    "$TESTS_DIR/blackjack/orca.toml" \
+    "$(printf 'Alice\ns\nn\n')"
 
 echo ""
 echo "=== Results ==="

@@ -34,6 +34,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <queue>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -323,20 +325,60 @@ static std::string deriveObjPath(const std::string& srcPath, const std::string& 
 // (externs: exported FunctionDecls from imported modules to pre-declare)
 // ==========================
 
+struct ExternDecls {
+	std::vector<const FunctionDecl*> functions;
+	std::vector<const EnumDecl*>     enums;
+	std::vector<const StructDecl*>   structs;
+};
+
+// Inject all extern declarations into a freshly created CodeGen instance.
+// Enums must come before structs so getLLVMType() can resolve enum field types.
+static void injectExterns(CodeGen& codegen, const ExternDecls& externs) {
+	for (const auto* ed : externs.enums) {
+		codegen.declareExternEnum(*ed);
+	}
+	// Topologically sort structs so dependencies are declared before dependents.
+	{
+		// Build a name→pointer map.
+		std::unordered_map<std::string, const StructDecl*> byName;
+		for (const auto* sd : externs.structs) byName[sd->name] = sd;
+		// DFS topo sort.
+		std::vector<const StructDecl*> sorted;
+		std::set<std::string> visited;
+		std::function<void(const StructDecl*)> visit = [&](const StructDecl* sd) {
+			if (visited.count(sd->name)) return;
+			visited.insert(sd->name);
+			for (const auto& member : sd->members) {
+				if (member.kind != StructMember::FIELD) continue;
+				// Direct field type dependency.
+				auto it = byName.find(member.fieldType->name);
+				if (it != byName.end()) visit(it->second);
+				// Parameterized type params (e.g. array<Card> → Card).
+				for (const auto& tp : member.fieldType->typeParams) {
+					auto tpIt = byName.find(tp->name);
+					if (tpIt != byName.end()) visit(tpIt->second);
+				}
+			}
+			sorted.push_back(sd);
+		};
+		for (const auto* sd : externs.structs) visit(sd);
+		for (const auto* sd : sorted) codegen.declareExternStruct(*sd);
+	}
+	for (const auto* fn : externs.functions) {
+		codegen.declareExternFunction(*fn);
+	}
+}
+
 static std::string compileFile(const std::string& srcPath,
 							   const std::string& buildDir,
 							   const Program& program,
-							   const std::vector<const FunctionDecl*>& externs,
+							   const ExternDecls& externs,
 							   CodeGen::OptLevel optLevel = CodeGen::OptLevel::O0) {
 	std::string objPath = deriveObjPath(srcPath, buildDir);
 
 	CodeGen codegen;
 	codegen.setOptLevel(optLevel);
-	// Pre-declare exported functions from imported modules so cross-module
-	// call sites resolve correctly at IR generation time.
-	for (const auto* fn : externs) {
-		codegen.declareExternFunction(*fn);
-	}
+	injectExterns(codegen, externs);
 	codegen.emitObjectFile(program, objPath);
 	return objPath;
 }
@@ -348,7 +390,7 @@ static std::string compileFile(const std::string& srcPath,
 static std::string emitIRFile(const std::string& srcPath,
 							  const std::string& buildDir,
 							  const Program& program,
-							  const std::vector<const FunctionDecl*>& externs,
+							  const ExternDecls& externs,
 							  CodeGen::OptLevel optLevel = CodeGen::OptLevel::O0) {
 	// Derive output .ll path from source path (same logic as compileFile).
 	std::string irName = srcPath;
@@ -363,9 +405,7 @@ static std::string emitIRFile(const std::string& srcPath,
 
 	CodeGen codegen;
 	codegen.setOptLevel(optLevel);
-	for (const auto* fn : externs) {
-		codegen.declareExternFunction(*fn);
-	}
+	injectExterns(codegen, externs);
 	std::string irStr = codegen.generate(program);
 
 	std::ofstream out(irPath);
@@ -538,7 +578,7 @@ static int cmdCheck(const std::string& tomlPath) {
 // ==========================
 
 static void printHelp() {
-	std::cout << "orca — ByteFrost build orchestrator\n"
+	std::cout << "orca - ByteFrost build orchestrator\n"
 				 "\n"
 				 "USAGE:\n"
 				 "  orca [build] [OPTIONS]          Build the project in the current directory\n"
@@ -880,17 +920,34 @@ int main(int argc, char* argv[]) {
 				continue;
 			const std::string& file = it->second;
 
-			// Collect exported functions from all direct dependencies.
-			std::vector<const FunctionDecl*> externs;
-			auto depsIt = deps.find(mod);
-			if (depsIt != deps.end()) {
-				for (const auto& depMod : depsIt->second) {
-					auto progIt = parsedPrograms.find(depMod);
-					if (progIt == parsedPrograms.end())
-						continue;
-					for (const auto& fn : progIt->second.functions) {
-						if (fn->isExported)
-							externs.push_back(fn.get());
+			// Collect exported functions, enums, and structs from all transitive dependencies.
+			ExternDecls externs;
+			// BFS/DFS over the dep graph from this module.
+			{
+				std::set<std::string> visited;
+				std::queue<std::string> queue;
+				auto depsIt0 = deps.find(mod);
+				if (depsIt0 != deps.end()) {
+					for (const auto& d : depsIt0->second)
+						queue.push(d);
+				}
+				while (!queue.empty()) {
+					std::string cur = queue.front(); queue.pop();
+					if (visited.count(cur)) continue;
+					visited.insert(cur);
+					auto progIt = parsedPrograms.find(cur);
+					if (progIt != parsedPrograms.end()) {
+						for (const auto& ed : progIt->second.enums)
+							if (ed->isExported) externs.enums.push_back(ed.get());
+						for (const auto& sd : progIt->second.structs)
+							if (sd->isExported) externs.structs.push_back(sd.get());
+						for (const auto& fn : progIt->second.functions)
+							if (fn->isExported) externs.functions.push_back(fn.get());
+					}
+					auto depsIt = deps.find(cur);
+					if (depsIt != deps.end()) {
+						for (const auto& d : depsIt->second)
+							if (!visited.count(d)) queue.push(d);
 					}
 				}
 			}

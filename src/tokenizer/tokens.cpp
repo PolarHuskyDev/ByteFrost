@@ -80,6 +80,8 @@ const char* tokenTypeToString(TokenType type) {
 			return "AS";
 		case TokenType::OVERRIDDEN_TOKEN:
 			return "OVERRIDDEN";
+		case TokenType::ENUM_TOKEN:
+			return "ENUM";
 		case TokenType::PLUS_TOKEN:
 			return "PLUS";
 		case TokenType::MINUS_TOKEN:

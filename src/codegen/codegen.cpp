@@ -167,6 +167,7 @@ void CodeGen::buildIR(const Program& program) {
 	}
 
 	// Register all struct types first (so they can be referenced).
+	registerEnumTypes(program);
 	registerStructTypes(program);
 
 	// Generate struct methods.
@@ -276,6 +277,75 @@ void CodeGen::declareExternFunction(const FunctionDecl& fn) {
 	llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, fn.name, module.get());
 }
 
+void CodeGen::declareExternEnum(const EnumDecl& ed) {
+	// Skip if already registered (e.g. two dependencies export the same type).
+	if (enumRegistry.count(ed.name))
+		return;
+	EnumInfo info;
+	for (const auto& variant : ed.variants) {
+		info.variants[variant.name] = variant.value;
+		info.variantNames.push_back(variant.name);
+	}
+	enumRegistry[ed.name] = std::move(info);
+}
+
+void CodeGen::declareExternStruct(const StructDecl& sd) {
+	// Skip if already registered.
+	if (structRegistry.count(sd.name))
+		return;
+
+	StructInfo info;
+	std::vector<llvm::Type*> fieldTypes;
+
+	for (const auto& member : sd.members) {
+		if (member.kind != StructMember::FIELD)
+			continue;
+		llvm::Type* ft = getLLVMType(*member.fieldType);
+		info.fieldNames.push_back(member.fieldName);
+		info.fieldLLVMTypes.push_back(ft);
+		info.fieldIndices[member.fieldName] = fieldTypes.size();
+		fieldTypes.push_back(ft);
+		// Track BF type name for enum- and struct-typed fields.
+		const std::string& ftName = member.fieldType->name;
+		if (enumRegistry.count(ftName) || structRegistry.count(ftName)) {
+			info.fieldBFTypeNames[member.fieldName] = ftName;
+		} else if (ftName == "array" && !member.fieldType->typeParams.empty()) {
+			info.fieldBFTypeNames[member.fieldName] =
+				"array<" + member.fieldType->typeParams[0]->name + ">";
+		} else if (ftName == "map" && member.fieldType->typeParams.size() >= 2) {
+			info.fieldBFTypeNames[member.fieldName] =
+				"map<" + member.fieldType->typeParams[0]->name + "," +
+				member.fieldType->typeParams[1]->name + ">";
+		}
+	}
+
+	info.llvmType = llvm::StructType::create(*context, fieldTypes, sd.name);
+
+	// Register method signatures so cross-module method calls can be resolved.
+	for (const auto& member : sd.members) {
+		if (member.kind != StructMember::METHOD)
+			continue;
+		const auto& fn = *member.method;
+		std::string mangledName = sd.name + "." + fn.name;
+		info.methods[fn.name] = mangledName;
+		if (fn.name == "constructor")
+			info.hasConstructor = true;
+		// Also pre-declare the LLVM function so call sites compile.
+		if (!module->getFunction(mangledName)) {
+			std::vector<llvm::Type*> paramTypes;
+			paramTypes.push_back(llvm::PointerType::getUnqual(*context));  // this
+			for (const auto& param : fn.params) {
+				paramTypes.push_back(getLLVMType(*param.type));
+			}
+			llvm::Type* retType = getLLVMType(*fn.returnType);
+			auto* funcType = llvm::FunctionType::get(retType, paramTypes, false);
+			llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, mangledName, module.get());
+		}
+	}
+
+	structRegistry[sd.name] = std::move(info);
+}
+
 // ==========================
 // Built-in declarations
 // ==========================
@@ -308,6 +378,14 @@ void CodeGen::declareBuiltins() {
 	// snprintf(char* buf, size_t size, const char* fmt, ...) -> i32
 	auto snprintfType = llvm::FunctionType::get(i32, {i8Ptr, i64, i8Ptr}, true);
 	snprintfFunc = llvm::Function::Create(snprintfType, llvm::Function::ExternalLinkage, "snprintf", module.get());
+
+	// scanf(const char* fmt, ...) -> i32
+	auto scanfType = llvm::FunctionType::get(i32, {i8Ptr}, true);
+	scanfFunc = llvm::Function::Create(scanfType, llvm::Function::ExternalLinkage, "scanf", module.get());
+
+	// fflush(FILE* stream) -> i32  (call with NULL to flush all streams)
+	auto fflushType = llvm::FunctionType::get(i32, {i8Ptr}, false);
+	fflushFunc = llvm::Function::Create(fflushType, llvm::Function::ExternalLinkage, "fflush", module.get());
 
 	// Math stdlib: tan(double) -> double  (no LLVM intrinsic available).
 	// Declared lazily in generateMathCall to avoid collision with user-defined 'overridden tan'.
@@ -460,10 +538,15 @@ llvm::Type* CodeGen::getLLVMType(const TypeNode& type) {
 	if (type.name == "void")
 		return llvm::Type::getVoidTy(*context);
 
-	// User-defined struct type
-	auto structIt = structRegistry.find(type.name);
-	if (structIt != structRegistry.end()) {
-		return structIt->second.llvmType;
+	// Enum type — stored as i32.
+	if (enumRegistry.count(type.name)) {
+		return llvm::Type::getInt32Ty(*context);
+	}
+
+	// User-defined struct type — always an opaque pointer (heap-allocated reference).
+	// The concrete LLVM type lives in structRegistry for GEP/size queries.
+	if (structRegistry.count(type.name)) {
+		return llvm::PointerType::getUnqual(*context);
 	}
 
 	// Parameterized types
@@ -570,18 +653,41 @@ void CodeGen::registerStructTypes(const Program& program) {
 				info.fieldLLVMTypes.push_back(ft);
 				info.fieldIndices[member.fieldName] = fieldTypes.size();
 				fieldTypes.push_back(ft);
+				// Track BF type name for enum, struct, array<T>, and map<K,V> fields.
+				const std::string& ftName = member.fieldType->name;
+				if (enumRegistry.count(ftName) || structRegistry.count(ftName)) {
+					info.fieldBFTypeNames[member.fieldName] = ftName;
+				} else if (ftName == "array" && !member.fieldType->typeParams.empty()) {
+					info.fieldBFTypeNames[member.fieldName] =
+						"array<" + member.fieldType->typeParams[0]->name + ">";
+				} else if (ftName == "map" && member.fieldType->typeParams.size() >= 2) {
+					info.fieldBFTypeNames[member.fieldName] =
+						"map<" + member.fieldType->typeParams[0]->name + "," +
+						member.fieldType->typeParams[1]->name + ">";
+				}
 			}
 		}
 
 		info.llvmType = llvm::StructType::create(*context, fieldTypes, sd->name);
 
-		// Register method names.
+		// Register method names, and pre-declare the LLVM function so call
+		// sites within the same struct (e.g. constructor calling shuffle) compile.
 		for (const auto& member : sd->members) {
 			if (member.kind == StructMember::METHOD) {
 				std::string mangledName = sd->name + "." + member.method->name;
 				info.methods[member.method->name] = mangledName;
 				if (member.method->name == "constructor") {
 					info.hasConstructor = true;
+				}
+				if (!module->getFunction(mangledName)) {
+					std::vector<llvm::Type*> paramTypes;
+					paramTypes.push_back(llvm::PointerType::getUnqual(*context));  // this
+					for (const auto& param : member.method->params) {
+						paramTypes.push_back(getLLVMType(*param.type));
+					}
+					llvm::Type* retType = getLLVMType(*member.method->returnType);
+					auto* funcType = llvm::FunctionType::get(retType, paramTypes, false);
+					llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, mangledName, module.get());
 				}
 			}
 		}
@@ -612,8 +718,13 @@ void CodeGen::generateStructMethods(const Program& program) {
 			llvm::Type* retType = getLLVMType(*fn.returnType);
 			auto funcType = llvm::FunctionType::get(retType, paramTypes, false);
 
-			llvm::Function* function =
-				llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, mangledName, module.get());
+			// Reuse the pre-declared function if it exists (from registerStructTypes);
+			// otherwise create it now.
+			llvm::Function* function = module->getFunction(mangledName);
+			if (!function) {
+				function =
+					llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, mangledName, module.get());
+			}
 
 			// Set parameter names.
 			auto argIt = function->arg_begin();
@@ -640,10 +751,53 @@ void CodeGen::generateStructMethods(const Program& program) {
 				llvm::Type* paramType = getLLVMType(*fn.params[i].type);
 				auto alloca = createEntryBlockAlloca(function, fn.params[i].name, paramType);
 				builder->CreateStore(&*argIt, alloca);
-				declareVariable(fn.params[i].name, alloca, paramType);
+				// Build the full BF type name (including type params for array<T> / map<K,V>).
+				const auto& pTypeNode = *fn.params[i].type;
+				std::string fullPBFType = pTypeNode.name;
+				if (pTypeNode.name == "array" && !pTypeNode.typeParams.empty()) {
+					fullPBFType = "array<" + pTypeNode.typeParams[0]->name + ">";
+				} else if (pTypeNode.name == "map" && pTypeNode.typeParams.size() >= 2) {
+					fullPBFType = "map<" + pTypeNode.typeParams[0]->name + ","
+						+ pTypeNode.typeParams[1]->name + ">";
+				}
+				// For array/map params: register BF type name for indexing/length but do NOT
+				// add to heapOwned — the caller owns the collection; we don't inc/dec refcount.
+				if (fullPBFType.substr(0, 6) == "array<" || fullPBFType.substr(0, 4) == "map<") {
+					scopes.back().variables[fn.params[i].name]  = alloca;
+					scopes.back().varTypes[fn.params[i].name]   = paramType;
+					scopes.back().varBFTypeNames[fn.params[i].name] = fullPBFType;
+				} else {
+					declareVariable(fn.params[i].name, alloca, paramType, fullPBFType);
+				}
 			}
 
 			// Generate body.
+			// For constructor methods: auto-initialize all array<T> fields before user code.
+			if (fn.name == "constructor") {
+				auto* i64 = llvm::Type::getInt64Ty(*context);
+				constexpr uint64_t INIT_CAP = 8;
+				auto* thisPtr = builder->CreateLoad(ptrType, thisAlloca, "this.ptr.init");
+				for (const auto& [fieldName, bfFieldType] : info.fieldBFTypeNames) {
+					if (bfFieldType.substr(0, 6) == "array<") {
+						std::string eTN = bfFieldType.substr(6, bfFieldType.size() - 7);
+						TypeNode eNode(eTN);
+						llvm::Type* eType = getLLVMType(eNode);
+						auto* arrType = getOrCreateArrayType(eType);
+						size_t fi = info.fieldIndices.at(fieldName);
+						llvm::Value* arrGEP = builder->CreateStructGEP(info.llvmType, thisPtr, fi, fieldName + ".gep");
+						uint64_t eSize = module->getDataLayout().getTypeAllocSize(eType);
+						llvm::Value* dataBuf = builder->CreateCall(
+							mallocFunc, {llvm::ConstantInt::get(i64, INIT_CAP * eSize)}, fieldName + ".data");
+						builder->CreateStore(dataBuf, builder->CreateStructGEP(arrType, arrGEP, 0));
+						builder->CreateStore(llvm::ConstantInt::get(i64, 0), builder->CreateStructGEP(arrType, arrGEP, 1));
+						builder->CreateStore(llvm::ConstantInt::get(i64, INIT_CAP), builder->CreateStructGEP(arrType, arrGEP, 2));
+						llvm::Value* rcBuf = builder->CreateCall(
+							mallocFunc, {llvm::ConstantInt::get(i64, 8)}, fieldName + ".rc");
+						builder->CreateStore(llvm::ConstantInt::get(i64, 1), rcBuf);
+						builder->CreateStore(rcBuf, builder->CreateStructGEP(arrType, arrGEP, 3));
+					}
+				}
+			}
 			for (const auto& stmt : fn.body.statements) {
 				generateStatement(*stmt);
 				if (builder->GetInsertBlock()->getTerminator())
@@ -676,16 +830,54 @@ void CodeGen::generateStructInit(const StructInitExpr& expr, llvm::Value* basePt
 
 		// Handle nested struct init: center: { x: 10, y: 20 }
 		if (auto* nestedInit = dynamic_cast<const StructInitExpr*>(fieldExpr.get())) {
-			llvm::Type* fieldType = info.fieldLLVMTypes[idx];
-			if (auto* st = llvm::dyn_cast<llvm::StructType>(fieldType)) {
-				if (st->hasName()) {
-					generateStructInit(*nestedInit, fieldPtr, st->getName().str());
-					continue;
+			auto fldBFIt2 = info.fieldBFTypeNames.find(fieldName);
+			if (fldBFIt2 != info.fieldBFTypeNames.end() && structRegistry.count(fldBFIt2->second)) {
+				// Struct field stored as pointer: malloc, init, store pointer.
+				std::string nSName = fldBFIt2->second;
+				auto& nInfo = structRegistry.at(nSName);
+				auto* i64_ = llvm::Type::getInt64Ty(*context);
+				uint64_t nSize = module->getDataLayout().getTypeAllocSize(nInfo.llvmType);
+				llvm::Value* nHeap = builder->CreateCall(
+					mallocFunc, {llvm::ConstantInt::get(i64_, nSize)}, nSName + ".nest");
+				builder->CreateStore(llvm::Constant::getNullValue(nInfo.llvmType), nHeap);
+				generateStructInit(*nestedInit, nHeap, nSName);
+				builder->CreateStore(nHeap, fieldPtr);
+				continue;
+			}
+		}
+
+		// Handle unqualified enum variant name in struct initializer context.
+		// e.g.  rank: ACE  where rank is of type CardRanks.
+		if (auto* ident = dynamic_cast<const IdentifierExpr*>(fieldExpr.get())) {
+			auto fieldBFIt = info.fieldBFTypeNames.find(fieldName);
+			if (fieldBFIt != info.fieldBFTypeNames.end()) {
+				auto enumIt = enumRegistry.find(fieldBFIt->second);
+				if (enumIt != enumRegistry.end()) {
+					auto variantIt = enumIt->second.variants.find(ident->name);
+					if (variantIt != enumIt->second.variants.end()) {
+						llvm::Value* val =
+							llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), variantIt->second);
+						builder->CreateStore(val, fieldPtr);
+						continue;
+					}
+					// Identifier not found as a variant – fall through to normal evaluation which will
+					// give a meaningful error.
 				}
 			}
 		}
 
 		llvm::Value* val = generateExpression(*fieldExpr);
+		// Type safety: reject int values for enum-typed fields.
+		{
+			auto fieldBFIt = info.fieldBFTypeNames.find(fieldName);
+			if (fieldBFIt != info.fieldBFTypeNames.end() && enumRegistry.count(fieldBFIt->second)) {
+				if (val->getType()->isIntegerTy(64)) {
+					throw CodeGenError(
+						"Type error: cannot assign integer value to enum field '" + fieldName +
+						"' of type '" + fieldBFIt->second + "'. Use an explicit enum variant.");
+				}
+			}
+		}
 		builder->CreateStore(val, fieldPtr);
 	}
 }
@@ -694,12 +886,8 @@ std::pair<llvm::Value*, std::string> CodeGen::resolveStructBase(const Expression
 	if (auto* ident = dynamic_cast<const IdentifierExpr*>(&expr)) {
 		std::string structName = lookupVarBFTypeName(ident->name);
 		llvm::Type* varType = lookupVarType(ident->name);
-		llvm::Value* basePtr;
-		if (varType->isStructTy()) {
-			basePtr = lookupVariable(ident->name);
-		} else {
-			basePtr = builder->CreateLoad(varType, lookupVariable(ident->name), ident->name + ".ptr");
-		}
+		// Struct variables are always ptrType allocas — load the pointer.
+		llvm::Value* basePtr = builder->CreateLoad(varType, lookupVariable(ident->name), ident->name + ".ptr");
 		return {basePtr, structName};
 	}
 	if (dynamic_cast<const ThisExpr*>(&expr)) {
@@ -717,19 +905,127 @@ std::pair<llvm::Value*, std::string> CodeGen::resolveStructBase(const Expression
 			throw CodeGenError("Unknown field: " + member->member + " on struct " + parentStructName);
 		}
 		size_t idx = fieldIt->second;
-		auto* fieldPtr = builder->CreateStructGEP(parentInfo.llvmType, parentPtr, idx, member->member + ".ptr");
+		auto* fieldGEP = builder->CreateStructGEP(parentInfo.llvmType, parentPtr, idx, member->member + ".gep");
 
-		// Determine BF type name of this field
-		llvm::Type* fieldType = parentInfo.fieldLLVMTypes[idx];
-		std::string fieldStructName;
-		if (auto* st = llvm::dyn_cast<llvm::StructType>(fieldType)) {
-			if (st->hasName()) {
-				fieldStructName = st->getName().str();
+		// If the field is a user-defined struct (stored as pointer), load the pointer.
+		// Arrays and primitives are stored inline — return the GEP directly.
+		auto fldBFIt = parentInfo.fieldBFTypeNames.find(member->member);
+		if (fldBFIt != parentInfo.fieldBFTypeNames.end() && structRegistry.count(fldBFIt->second)) {
+			auto* structPtr = builder->CreateLoad(
+				llvm::PointerType::getUnqual(*context), fieldGEP, member->member + ".ptr");
+			return {structPtr, fldBFIt->second};
+		}
+		std::string fieldBFName = (fldBFIt != parentInfo.fieldBFTypeNames.end()) ? fldBFIt->second : "";
+		return {fieldGEP, fieldBFName};
+	}
+	// IndexExpr: arr[i] or this.field[i] where element is a struct type.
+	if (auto* indexExpr = dynamic_cast<const IndexExpr*>(&expr)) {
+		std::string arrBFType = getExprBFType(*indexExpr->object);
+		if (arrBFType.size() > 6 && arrBFType.substr(0, 6) == "array<") {
+			std::string elemBFType = arrBFType.substr(6, arrBFType.size() - 7);
+			if (structRegistry.count(elemBFType)) {
+				return {generateIndex(*indexExpr), elemBFType};
 			}
 		}
-		return {fieldPtr, fieldStructName};
 	}
 	throw CodeGenError("Cannot resolve struct base for expression");
+}
+
+// ==========================
+// Enum support
+// ==========================
+
+void CodeGen::registerEnumTypes(const Program& program) {
+	for (const auto& enumDecl : program.enums) {
+		EnumInfo info;
+		for (const auto& variant : enumDecl->variants) {
+			info.variants[variant.name] = variant.value;
+			info.variantNames.push_back(variant.name);
+		}
+		enumRegistry[enumDecl->name] = std::move(info);
+	}
+}
+
+std::string CodeGen::getExprBFType(const Expression& expr) {
+	if (auto* id = dynamic_cast<const IdentifierExpr*>(&expr)) {
+		for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
+			auto found = it->varBFTypeNames.find(id->name);
+			if (found != it->varBFTypeNames.end())
+				return found->second;
+		}
+		return "";
+	}
+	if (dynamic_cast<const ThisExpr*>(&expr)) {
+		return lookupVarBFTypeName("this");
+	}
+	if (auto* ma = dynamic_cast<const MemberAccessExpr*>(&expr)) {
+		// Case 1: EnumType.VARIANT — object is an identifier naming an enum
+		if (auto* id = dynamic_cast<const IdentifierExpr*>(ma->object.get())) {
+			if (enumRegistry.count(id->name)) {
+				return id->name;  // The BF type of CardRanks.ACE is "CardRanks"
+			}
+		}
+		// Case 2: struct field access — look up the field's BF type
+		std::string parentBFType = getExprBFType(*ma->object);
+		if (!parentBFType.empty()) {
+			auto structIt = structRegistry.find(parentBFType);
+			if (structIt != structRegistry.end()) {
+				auto& info = structIt->second;
+				auto fieldIt = info.fieldBFTypeNames.find(ma->member);
+				if (fieldIt != info.fieldBFTypeNames.end()) {
+					return fieldIt->second;
+				}
+			}
+		}
+		return "";
+	}
+	// IndexExpr: arr[i] or this.field[i] — return element BF type.
+	if (auto* ie = dynamic_cast<const IndexExpr*>(&expr)) {
+		std::string objBFType = getExprBFType(*ie->object);
+		if (objBFType.size() > 6 && objBFType.substr(0, 6) == "array<")
+			return objBFType.substr(6, objBFType.size() - 7);
+		return "";
+	}
+	return "";
+}
+
+llvm::Value* CodeGen::generateEnumToString(llvm::Value* enumVal, const std::string& enumTypeName) {
+	auto& info = enumRegistry.at(enumTypeName);
+	auto* fn = builder->GetInsertBlock()->getParent();
+	auto* i32 = llvm::Type::getInt32Ty(*context);
+	auto* ptrType = llvm::PointerType::getUnqual(*context);
+
+	// Alloca to hold the selected name pointer.
+	auto* resultAlloca = createEntryBlockAlloca(fn, "enum.name.ptr", ptrType);
+
+	auto* mergeBB = llvm::BasicBlock::Create(*context, "enum.name.merge", fn);
+	auto* defaultBB = llvm::BasicBlock::Create(*context, "enum.name.def", fn, mergeBB);
+
+	// Ensure the value is i32.
+	llvm::Value* val = enumVal;
+	if (!val->getType()->isIntegerTy(32)) {
+		val = builder->CreateIntCast(val, i32, false, "enum.cast");
+	}
+
+	auto* sw = builder->CreateSwitch(val, defaultBB, static_cast<unsigned>(info.variantNames.size()));
+
+	for (size_t i = 0; i < info.variantNames.size(); i++) {
+		auto* caseBB = llvm::BasicBlock::Create(*context, "enum.case", fn, defaultBB);
+		sw->addCase(llvm::ConstantInt::get(i32, static_cast<int32_t>(i)), caseBB);
+
+		builder->SetInsertPoint(caseBB);
+		llvm::Value* nameStr = builder->CreateGlobalStringPtr(info.variantNames[i], "enumname");
+		builder->CreateStore(nameStr, resultAlloca);
+		builder->CreateBr(mergeBB);
+	}
+
+	builder->SetInsertPoint(defaultBB);
+	llvm::Value* unknownStr = builder->CreateGlobalStringPtr("<unknown>", "enum.unk");
+	builder->CreateStore(unknownStr, resultAlloca);
+	builder->CreateBr(mergeBB);
+
+	builder->SetInsertPoint(mergeBB);
+	return builder->CreateLoad(ptrType, resultAlloca, "enum.name.val");
 }
 
 // ==========================
@@ -810,7 +1106,7 @@ llvm::Value* CodeGen::generateEmptyArray(llvm::Type* elemType) {
 	return alloca;
 }
 
-void CodeGen::generateArrayPush(llvm::AllocaInst* arrAlloca, llvm::Type* elemType, llvm::Value* value) {
+void CodeGen::generateArrayPush(llvm::Value* arrAlloca, llvm::Type* elemType, llvm::Value* value) {
 	auto* fn = builder->GetInsertBlock()->getParent();
 	auto* arrType = getOrCreateArrayType(elemType);
 	auto* i64 = llvm::Type::getInt64Ty(*context);
@@ -1100,7 +1396,14 @@ void CodeGen::generateFunction(const FunctionDecl& fn) {
 		llvm::Type* paramType = paramTypes[idx];
 		auto alloca = createEntryBlockAlloca(function, fn.params[idx].name, paramType);
 		builder->CreateStore(&arg, alloca);
-		declareVariable(fn.params[idx].name, alloca, paramType);
+		// Preserve the BF type name for enum and struct-typed parameters so that
+		// getExprBFType() can identify them (e.g. for type-safe enum comparison).
+		const std::string& paramTypeName = fn.params[idx].type->name;
+		if (enumRegistry.count(paramTypeName) || structRegistry.count(paramTypeName)) {
+			declareVariable(fn.params[idx].name, alloca, paramType, paramTypeName);
+		} else {
+			declareVariable(fn.params[idx].name, alloca, paramType);
+		}
 		idx++;
 	}
 
@@ -1192,6 +1495,19 @@ void CodeGen::generateVarDecl(const VarDeclStmt& stmt) {
 			bfTypeName = "map<" + stmt.type->typeParams[0]->name + "," + stmt.type->typeParams[1]->name + ">";
 		}
 	} else if (stmt.isWalrus && stmt.initializer) {
+		// Special case walrus + input(): always string.
+		if (auto* callExpr = dynamic_cast<const CallExpr*>(stmt.initializer.get())) {
+			if (auto* callId = dynamic_cast<const IdentifierExpr*>(callExpr->callee.get())) {
+				if (callId->name == "input") {
+					auto* ptrType = llvm::PointerType::getUnqual(*context);
+					auto alloca = createEntryBlockAlloca(fn, stmt.name, ptrType);
+					llvm::Value* inputVal = generateInputCall(callExpr->arguments, "string");
+					builder->CreateStore(inputVal, alloca);
+					declareVariable(stmt.name, alloca, ptrType, "string");
+					return;
+				}
+			}
+		}
 		// Infer type from initializer.
 		llvm::Value* initVal = generateExpression(*stmt.initializer);
 		varType = initVal->getType();
@@ -1219,41 +1535,48 @@ void CodeGen::generateVarDecl(const VarDeclStmt& stmt) {
 				}
 			}
 		}
+		// If the initializer is an enum expression, track its enum type name.
+		{
+			std::string initBFType = getExprBFType(*stmt.initializer);
+			if (!initBFType.empty() && enumRegistry.count(initBFType)) {
+				declareVariable(stmt.name, alloca, varType, initBFType);
+				return;
+			}
+		}
 		declareVariable(stmt.name, alloca, varType);
 		return;
 	} else {
 		throw CodeGenError("Cannot infer type for variable: " + stmt.name);
 	}
 
-	// Check for struct type: pointer semantics (heap-allocated, default null).
-	if (varType->isStructTy()) {
-		auto structIt = structRegistry.find(bfTypeName);
-		if (structIt != structRegistry.end()) {
-			// Struct variables are nullable heap pointers.
-			auto* ptrType = llvm::PointerType::getUnqual(*context);
-			auto alloca = createEntryBlockAlloca(fn, stmt.name, ptrType);
-			if (stmt.initializer) {
-				if (auto* structInit = dynamic_cast<const StructInitExpr*>(stmt.initializer.get())) {
-					// Heap-allocate and initialize the struct.
-					auto* i64 = llvm::Type::getInt64Ty(*context);
-					uint64_t structSize = module->getDataLayout().getTypeAllocSize(varType);
-					llvm::Value* heapPtr =
-						builder->CreateCall(mallocFunc, {llvm::ConstantInt::get(i64, structSize)}, stmt.name + ".heap");
-					generateStructInit(*structInit, heapPtr, bfTypeName);
-					builder->CreateStore(heapPtr, alloca);
-				} else {
-					// Other initializer: constructor result, null literal, etc.
-					llvm::Value* initVal = generateExpression(*stmt.initializer);
-					builder->CreateStore(initVal, alloca);
-				}
+	// Check for user-defined struct type: always a heap pointer (reference semantics).
+	if (structRegistry.count(bfTypeName)) {
+		auto& structInfo = structRegistry.at(bfTypeName);
+		auto* ptrType = llvm::PointerType::getUnqual(*context);
+		auto alloca = createEntryBlockAlloca(fn, stmt.name, ptrType);
+		if (stmt.initializer) {
+			if (auto* structInit = dynamic_cast<const StructInitExpr*>(stmt.initializer.get())) {
+				// Heap-allocate and initialize the struct.
+				auto* i64 = llvm::Type::getInt64Ty(*context);
+				uint64_t structSize = module->getDataLayout().getTypeAllocSize(structInfo.llvmType);
+				llvm::Value* heapPtr =
+					builder->CreateCall(mallocFunc, {llvm::ConstantInt::get(i64, structSize)}, stmt.name + ".heap");
+				builder->CreateStore(llvm::Constant::getNullValue(structInfo.llvmType), heapPtr);
+				generateStructInit(*structInit, heapPtr, bfTypeName);
+				builder->CreateStore(heapPtr, alloca);
 			} else {
-				// No initializer: default to null pointer.
-				builder->CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ptrType)), alloca);
+				// Other initializer: constructor result, null literal, etc.
+				llvm::Value* initVal = generateExpression(*stmt.initializer);
+				builder->CreateStore(initVal, alloca);
 			}
-			declareVariable(stmt.name, alloca, ptrType, bfTypeName);
-			return;
+		} else {
+			// No initializer: default to null pointer.
+			builder->CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ptrType)), alloca);
 		}
-
+		declareVariable(stmt.name, alloca, ptrType, bfTypeName);
+		return;
+	}
+	if (varType->isStructTy()) {
 		// It's an array or map type (those are also LLVM struct types).
 		if (bfTypeName.substr(0, 6) == "array<") {
 			auto alloca = createEntryBlockAlloca(fn, stmt.name, varType);
@@ -1297,10 +1620,27 @@ void CodeGen::generateVarDecl(const VarDeclStmt& stmt) {
 	auto alloca = createEntryBlockAlloca(fn, stmt.name, varType);
 
 	if (stmt.initializer) {
+		// Special case: input() call — generate type-aware reading.
+		if (auto* callExpr = dynamic_cast<const CallExpr*>(stmt.initializer.get())) {
+			if (auto* callId = dynamic_cast<const IdentifierExpr*>(callExpr->callee.get())) {
+				if (callId->name == "input") {
+					llvm::Value* inputVal = generateInputCall(callExpr->arguments, bfTypeName);
+					builder->CreateStore(inputVal, alloca);
+					declareVariable(stmt.name, alloca, varType, bfTypeName);
+					return;
+				}
+			}
+		}
 		llvm::Value* initVal = generateExpression(*stmt.initializer);
 		// Implicit cast: if variable is float and init is int, cast.
 		if (isFloatType(varType) && initVal->getType()->isIntegerTy()) {
 			initVal = builder->CreateSIToFP(initVal, varType, "cast");
+		}
+		// Type safety: reject int→enum implicit conversion.
+		if (varType->isIntegerTy(32) && enumRegistry.count(bfTypeName) && initVal->getType()->isIntegerTy(64)) {
+			throw CodeGenError(
+				"Type error: cannot assign integer to enum type '" + bfTypeName +
+				"'. Use an explicit enum variant (e.g. " + bfTypeName + ".VARIANT).");
 		}
 		builder->CreateStore(initVal, alloca);
 	} else {
@@ -1362,6 +1702,23 @@ void CodeGen::generateAssign(const AssignStmt& stmt) {
 				ptrElemType = getLLVMType(tn);
 			}
 		}
+		// Chained: this.field[i] or obj.field[i]
+		if (!ptrElemType) {
+			if (auto* ma = dynamic_cast<const MemberAccessExpr*>(indexExpr->object.get())) {
+				auto [basePtr, baseBFType] = resolveStructBase(*ma->object);
+				auto baseStructIt = structRegistry.find(baseBFType);
+				if (baseStructIt != structRegistry.end()) {
+					auto fldBFIt = baseStructIt->second.fieldBFTypeNames.find(ma->member);
+					if (fldBFIt != baseStructIt->second.fieldBFTypeNames.end()) {
+						std::string fbt = fldBFIt->second;
+						if (fbt.substr(0, 6) == "array<") {
+							TypeNode tn(fbt.substr(6, fbt.size() - 7));
+							ptrElemType = getLLVMType(tn);
+						}
+					}
+				}
+			}
+		}
 		if (!ptrElemType)
 			ptrElemType = rhs->getType();
 	} else {
@@ -1369,6 +1726,17 @@ void CodeGen::generateAssign(const AssignStmt& stmt) {
 	}
 
 	if (stmt.op == "=") {
+		// Type safety: reject int→enum implicit assignment.
+		if (rhs->getType()->isIntegerTy(64) && ptrElemType && ptrElemType->isIntegerTy(32)) {
+			if (auto* ident = dynamic_cast<const IdentifierExpr*>(stmt.target.get())) {
+				if (enumRegistry.count(lookupVarBFTypeName(ident->name))) {
+					throw CodeGenError(
+						"Type error: cannot assign integer to enum variable '" + ident->name +
+						"' of type '" + lookupVarBFTypeName(ident->name) +
+						"'. Use an explicit enum variant.");
+				}
+			}
+		}
 		builder->CreateStore(rhs, ptr);
 	} else {
 		// Compound assignment: load current value, compute, store.
@@ -1430,9 +1798,43 @@ llvm::Value* CodeGen::generateLValue(const Expression& expr) {
 				return builder->CreateGEP(elemType, data, idx, "elem.ptr");
 			}
 		}
+		// Chained: this.field[i] or obj.field[i]
+		if (auto* ma = dynamic_cast<const MemberAccessExpr*>(indexExpr->object.get())) {
+			auto [basePtr, baseBFType] = resolveStructBase(*ma->object);
+			auto baseStructIt = structRegistry.find(baseBFType);
+			if (baseStructIt != structRegistry.end()) {
+				auto& baseInfo = baseStructIt->second;
+				auto fldBFIt = baseInfo.fieldBFTypeNames.find(ma->member);
+				auto fldIdxIt = baseInfo.fieldIndices.find(ma->member);
+				if (fldBFIt != baseInfo.fieldBFTypeNames.end() && fldIdxIt != baseInfo.fieldIndices.end()) {
+					std::string fieldBFType = fldBFIt->second;
+					if (fieldBFType.substr(0, 6) == "array<") {
+						std::string eTN = fieldBFType.substr(6, fieldBFType.size() - 7);
+						TypeNode eTNode(eTN);
+						llvm::Type* eType = getLLVMType(eTNode);
+						auto* arrType = getOrCreateArrayType(eType);
+						auto* ptrType = llvm::PointerType::getUnqual(*context);
+						llvm::Value* fieldGEP = builder->CreateStructGEP(
+							baseInfo.llvmType, basePtr, fldIdxIt->second, ma->member + ".gep");
+						llvm::Value* data = builder->CreateLoad(
+							ptrType, builder->CreateStructGEP(arrType, fieldGEP, 0), "data");
+						llvm::Value* idx = generateExpression(*indexExpr->index);
+						return builder->CreateGEP(eType, data, idx, "elem.ptr");
+					}
+				}
+			}
+		}
 	}
 	// Member access lvalue: obj.field (supports chained access)
 	if (auto* memberExpr = dynamic_cast<const MemberAccessExpr*>(&expr)) {
+		// Enum member access is never assignable.
+		if (auto* id = dynamic_cast<const IdentifierExpr*>(memberExpr->object.get())) {
+			if (enumRegistry.count(id->name)) {
+				throw CodeGenError(
+					"Cannot assign to enum variant '" + memberExpr->member + "' — enum variants are read-only");
+			}
+		}
+
 		auto [basePtr, structName] = resolveStructBase(*memberExpr->object);
 
 		auto structIt = structRegistry.find(structName);
@@ -1814,6 +2216,18 @@ void CodeGen::generateMatch(const MatchStmt& stmt) {
 void CodeGen::generateReturn(const ReturnStmt& stmt) {
 	if (stmt.value) {
 		llvm::Value* val = generateExpression(*stmt.value);
+		// Implicit cast: if the function returns float and the value is int, upcast.
+		auto* fn = builder->GetInsertBlock()->getParent();
+		llvm::Type* retType = fn->getReturnType();
+		if (isFloatType(retType) && val->getType()->isIntegerTy()) {
+			val = builder->CreateSIToFP(val, retType, "ret.cast");
+		}
+		// Type safety: reject int return value for enum return type.
+		if (retType->isIntegerTy(32) && val->getType()->isIntegerTy(64)) {
+			throw CodeGenError(
+				"Type error: cannot return integer value from function with enum return type. "
+				"Use an explicit enum variant.");
+		}
 		// Emit refcount cleanup for all active scopes before returning.
 		for (auto& scope : scopes) {
 			for (const auto& varName : scope.heapOwned) {
@@ -1980,6 +2394,34 @@ llvm::Value* CodeGen::generateIndex(const IndexExpr& expr) {
 			return generateMapGet(mapAlloca, keyType, valType, key);
 		}
 	}
+
+	// Chained member index: this.field[i] or obj.field[i]
+	if (auto* ma = dynamic_cast<const MemberAccessExpr*>(expr.object.get())) {
+		auto [basePtr, baseBFType] = resolveStructBase(*ma->object);
+		auto baseStructIt = structRegistry.find(baseBFType);
+		if (baseStructIt != structRegistry.end()) {
+			auto& baseInfo = baseStructIt->second;
+			auto fldBFIt = baseInfo.fieldBFTypeNames.find(ma->member);
+			auto fldIdxIt = baseInfo.fieldIndices.find(ma->member);
+			if (fldBFIt != baseInfo.fieldBFTypeNames.end() && fldIdxIt != baseInfo.fieldIndices.end()) {
+				std::string fieldBFType = fldBFIt->second;
+				if (fieldBFType.substr(0, 6) == "array<") {
+					std::string eTN = fieldBFType.substr(6, fieldBFType.size() - 7);
+					TypeNode eTNode(eTN);
+					llvm::Type* eType = getLLVMType(eTNode);
+					auto* arrType = getOrCreateArrayType(eType);
+					auto* ptrType = llvm::PointerType::getUnqual(*context);
+					llvm::Value* fieldGEP = builder->CreateStructGEP(
+						baseInfo.llvmType, basePtr, fldIdxIt->second, ma->member + ".gep");
+					llvm::Value* data = builder->CreateLoad(ptrType, builder->CreateStructGEP(arrType, fieldGEP, 0), "data");
+					llvm::Value* idx = generateExpression(*expr.index);
+					llvm::Value* elemPtr = builder->CreateGEP(eType, data, idx, "elem.ptr");
+					return builder->CreateLoad(eType, elemPtr, "elem");
+				}
+			}
+		}
+	}
+
 	throw CodeGenError("Unsupported index expression");
 }
 
@@ -1988,6 +2430,19 @@ llvm::Value* CodeGen::generateIndex(const IndexExpr& expr) {
 // ==========================
 
 llvm::Value* CodeGen::generateMemberAccess(const MemberAccessExpr& expr) {
+	// Check for enum member access: CardRanks.ACE
+	if (auto* id = dynamic_cast<const IdentifierExpr*>(expr.object.get())) {
+		auto enumIt = enumRegistry.find(id->name);
+		if (enumIt != enumRegistry.end()) {
+			auto variantIt = enumIt->second.variants.find(expr.member);
+			if (variantIt == enumIt->second.variants.end()) {
+				throw CodeGenError(
+					"Unknown enum variant '" + expr.member + "' in enum " + id->name);
+			}
+			return llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), variantIt->second);
+		}
+	}
+
 	auto [basePtr, structName] = resolveStructBase(*expr.object);
 
 	auto structIt = structRegistry.find(structName);
@@ -2025,7 +2480,12 @@ llvm::Value* CodeGen::generateInterpolatedString(const InterpolatedStringExpr& e
 
 		llvm::Value* val = generateExpression(*expr.expressions[i]);
 
-		if (val->getType()->isIntegerTy(1)) {
+		// Enum type: convert to string name.
+		std::string valBFType = getExprBFType(*expr.expressions[i]);
+		if (!valBFType.empty() && enumRegistry.count(valBFType)) {
+			val = generateEnumToString(val, valBFType);
+			formatStr += "%s";
+		} else if (val->getType()->isIntegerTy(1)) {
 			// Bool: convert to string.
 			llvm::Value* trueStr = builder->CreateGlobalStringPtr("true", "true.str");
 			llvm::Value* falseStr = builder->CreateGlobalStringPtr("false", "false.str");
@@ -2080,6 +2540,23 @@ llvm::Value* CodeGen::generateInterpolatedString(const InterpolatedStringExpr& e
 // ==========================
 
 llvm::Value* CodeGen::generateBinary(const BinaryExpr& expr) {
+	// Pre-check enum type safety for all comparison operators before generating values.
+	static const std::vector<std::string> cmpOps = {"==", "!=", "<", ">", "<=", ">="};
+	if (std::find(cmpOps.begin(), cmpOps.end(), expr.op) != cmpOps.end()) {
+		std::string lhsBFType = getExprBFType(*expr.left);
+		std::string rhsBFType = getExprBFType(*expr.right);
+		bool lhsIsEnum = !lhsBFType.empty() && enumRegistry.count(lhsBFType);
+		bool rhsIsEnum = !rhsBFType.empty() && enumRegistry.count(rhsBFType);
+		if (lhsIsEnum || rhsIsEnum) {
+			if (!lhsIsEnum || !rhsIsEnum || lhsBFType != rhsBFType) {
+				throw CodeGenError(
+					"Type error: cannot compare '" + (lhsIsEnum ? lhsBFType : "non-enum")
+					+ "' with '" + (rhsIsEnum ? rhsBFType : "non-enum")
+					+ "'. Enum values can only be compared with values of the same enum type.");
+			}
+		}
+	}
+
 	llvm::Value* lhs = generateExpression(*expr.left);
 	llvm::Value* rhs = generateExpression(*expr.right);
 
@@ -2243,6 +2720,54 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 		return generatePrintCall(expr.arguments);
 	}
 
+	// Check for built-in: input (default to string when called standalone)
+	if (callee && callee->name == "input") {
+		return generateInputCall(expr.arguments, "string");
+	}
+
+	// Check for built-in: rand() -> int
+	if (callee && callee->name == "rand") {
+		auto* i64 = llvm::Type::getInt64Ty(*context);
+		auto* i32 = llvm::Type::getInt32Ty(*context);
+		llvm::Function* randFn = module->getFunction("rand");
+		if (!randFn) {
+			auto randType = llvm::FunctionType::get(i32, {}, false);
+			randFn = llvm::Function::Create(randType, llvm::Function::ExternalLinkage, "rand", module.get());
+		}
+		llvm::Value* r = builder->CreateCall(randFn, {}, "rand");
+		return builder->CreateSExt(r, i64, "rand.ext");
+	}
+
+	// Check for built-in: srand(seed: int) -> void
+	if (callee && callee->name == "srand") {
+		auto* i32 = llvm::Type::getInt32Ty(*context);
+		llvm::Function* srandFn = module->getFunction("srand");
+		if (!srandFn) {
+			auto srandType = llvm::FunctionType::get(llvm::Type::getVoidTy(*context), {i32}, false);
+			srandFn = llvm::Function::Create(srandType, llvm::Function::ExternalLinkage, "srand", module.get());
+		}
+		if (expr.arguments.empty())
+			throw CodeGenError("srand() requires 1 argument");
+		llvm::Value* seed = generateExpression(*expr.arguments[0]);
+		if (!seed->getType()->isIntegerTy(32))
+			seed = builder->CreateTrunc(seed, i32, "srand.seed");
+		builder->CreateCall(srandFn, {seed});
+		return llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0);
+	}
+
+	// Check for built-in: time(0) -> int (for seeding rand)
+	if (callee && callee->name == "time") {
+		auto* i64 = llvm::Type::getInt64Ty(*context);
+		auto* i8Ptr = llvm::PointerType::getUnqual(*context);
+		llvm::Function* timeFn = module->getFunction("time");
+		if (!timeFn) {
+			auto timeType = llvm::FunctionType::get(i64, {i8Ptr}, false);
+			timeFn = llvm::Function::Create(timeType, llvm::Function::ExternalLinkage, "time", module.get());
+		}
+		llvm::Value* nullPtr = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8Ptr));
+		return builder->CreateCall(timeFn, {nullPtr}, "time");
+	}
+
 	// Check for math stdlib functions.
 	if (callee && stdlibMathNames().count(callee->name) && !overriddenMathFuncs_.count(callee->name)) {
 		return generateMathCall(callee->name, expr.arguments);
@@ -2260,6 +2785,30 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 				builder->CreateCall(mallocFunc, {llvm::ConstantInt::get(i64, structSize)}, callee->name + ".heap");
 			// Zero-initialize before calling constructor.
 			builder->CreateStore(llvm::Constant::getNullValue(info.llvmType), heapPtr);
+			// For embedded struct fields that have constructors, call them now so
+			// their internal arrays / state are properly initialized.
+			{
+				for (const auto& [fieldName, bfFieldType] : info.fieldBFTypeNames) {
+					auto embIt = structRegistry.find(bfFieldType);
+					if (embIt != structRegistry.end() && embIt->second.hasConstructor) {
+						llvm::Function* embCtor = module->getFunction(bfFieldType + ".constructor");
+						if (embCtor) {
+							size_t fi = info.fieldIndices.at(fieldName);
+							auto* ptrType_ = llvm::PointerType::getUnqual(*context);
+							auto* i64_ = llvm::Type::getInt64Ty(*context);
+							uint64_t embSz = module->getDataLayout().getTypeAllocSize(embIt->second.llvmType);
+							llvm::Value* embHeap = builder->CreateCall(
+								mallocFunc, {llvm::ConstantInt::get(i64_, embSz)}, fieldName + ".emb");
+							builder->CreateStore(llvm::Constant::getNullValue(embIt->second.llvmType), embHeap);
+							// Store the pointer in the parent struct's field slot.
+							llvm::Value* fSlot = builder->CreateStructGEP(
+								info.llvmType, heapPtr, fi, fieldName + ".slot");
+							builder->CreateStore(embHeap, fSlot);
+							builder->CreateCall(embCtor, {embHeap});
+						}
+					}
+				}
+			}
 			// Call StructName.constructor(heapPtr, args...)
 			llvm::Function* ctor = module->getFunction(callee->name + ".constructor");
 			if (!ctor)
@@ -2270,6 +2819,57 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 			}
 			builder->CreateCall(ctor, args);
 			// Return the heap pointer (struct is now reference-typed).
+			return heapPtr;
+		}
+		// Implicit default construction: StructName() with no args and no explicit constructor.
+		// malloc + zero-init + auto-init array fields + call embedded struct constructors.
+		if (structIt != structRegistry.end() && !structIt->second.hasConstructor && expr.arguments.empty()) {
+			auto& info = structIt->second;
+			auto* i64 = llvm::Type::getInt64Ty(*context);
+			uint64_t structSize = module->getDataLayout().getTypeAllocSize(info.llvmType);
+			llvm::Value* heapPtr =
+				builder->CreateCall(mallocFunc, {llvm::ConstantInt::get(i64, structSize)}, callee->name + ".heap");
+			builder->CreateStore(llvm::Constant::getNullValue(info.llvmType), heapPtr);
+			// Auto-init array<T> fields with initial capacity.
+			constexpr uint64_t INIT_CAP = 8;
+			for (const auto& [fieldName, bfFieldType] : info.fieldBFTypeNames) {
+				if (bfFieldType.substr(0, 6) == "array<") {
+					std::string eTN = bfFieldType.substr(6, bfFieldType.size() - 7);
+					TypeNode eNode(eTN);
+					llvm::Type* eType = getLLVMType(eNode);
+					auto* arrType = getOrCreateArrayType(eType);
+					size_t fi = info.fieldIndices.at(fieldName);
+					llvm::Value* arrGEP = builder->CreateStructGEP(info.llvmType, heapPtr, fi, fieldName + ".gep");
+					uint64_t eSize = module->getDataLayout().getTypeAllocSize(eType);
+					llvm::Value* dataBuf = builder->CreateCall(
+						mallocFunc, {llvm::ConstantInt::get(i64, INIT_CAP * eSize)}, fieldName + ".data");
+					builder->CreateStore(dataBuf, builder->CreateStructGEP(arrType, arrGEP, 0));
+					builder->CreateStore(llvm::ConstantInt::get(i64, 0), builder->CreateStructGEP(arrType, arrGEP, 1));
+					builder->CreateStore(llvm::ConstantInt::get(i64, INIT_CAP), builder->CreateStructGEP(arrType, arrGEP, 2));
+					llvm::Value* rcBuf = builder->CreateCall(
+						mallocFunc, {llvm::ConstantInt::get(i64, 8)}, fieldName + ".rc");
+					builder->CreateStore(llvm::ConstantInt::get(i64, 1), rcBuf);
+					builder->CreateStore(rcBuf, builder->CreateStructGEP(arrType, arrGEP, 3));
+				}
+			}
+			// Call constructors of embedded struct fields.
+			for (const auto& [fieldName, bfFieldType] : info.fieldBFTypeNames) {
+				auto embIt = structRegistry.find(bfFieldType);
+				if (embIt != structRegistry.end() && embIt->second.hasConstructor) {
+					llvm::Function* embCtor = module->getFunction(bfFieldType + ".constructor");
+					if (embCtor) {
+						size_t fi = info.fieldIndices.at(fieldName);
+						uint64_t embSz = module->getDataLayout().getTypeAllocSize(embIt->second.llvmType);
+						llvm::Value* embHeap = builder->CreateCall(
+							mallocFunc, {llvm::ConstantInt::get(i64, embSz)}, fieldName + ".emb");
+						builder->CreateStore(llvm::Constant::getNullValue(embIt->second.llvmType), embHeap);
+						llvm::Value* fSlot = builder->CreateStructGEP(
+							info.llvmType, heapPtr, fi, fieldName + ".slot");
+						builder->CreateStore(embHeap, fSlot);
+						builder->CreateCall(embCtor, {embHeap});
+					}
+				}
+			}
 			return heapPtr;
 		}
 	}
@@ -2323,17 +2923,60 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 				throw CodeGenError("Unknown array method: " + memberAccess->member);
 			}
 
-			// Struct method calls
+			// Struct method calls — struct variables are always ptrType allocas.
 			llvm::Type* varType = lookupVarType(ident->name);
-			if (varType->isStructTy()) {
-				objPtr = lookupVariable(ident->name);  // alloca IS the struct pointer
-			} else {
-				objPtr = builder->CreateLoad(varType, lookupVariable(ident->name), ident->name + ".ptr");
-			}
+			objPtr = builder->CreateLoad(varType, lookupVariable(ident->name), ident->name + ".ptr");
 		} else if (dynamic_cast<const ThisExpr*>(memberAccess->object.get())) {
 			bfType = lookupVarBFTypeName("this");
 			llvm::Type* thisType = lookupVarType("this");
 			objPtr = builder->CreateLoad(thisType, lookupVariable("this"), "this.ptr");
+		} else if (auto* innerMA = dynamic_cast<const MemberAccessExpr*>(memberAccess->object.get())) {
+			// Chained member access: e.g. this.values.push(x) or obj.hand.add(v)
+			// Resolve the inner access to get (basePtr, structBFType).
+			auto [basePtr, baseBFType] = resolveStructBase(*innerMA->object);
+			auto baseStructIt = structRegistry.find(baseBFType);
+			if (baseStructIt != structRegistry.end()) {
+				auto& baseInfo = baseStructIt->second;
+				auto fldBFIt = baseInfo.fieldBFTypeNames.find(innerMA->member);
+				if (fldBFIt != baseInfo.fieldBFTypeNames.end()) {
+					std::string fieldBFType = fldBFIt->second;
+					auto fldIdxIt = baseInfo.fieldIndices.find(innerMA->member);
+					if (fldIdxIt != baseInfo.fieldIndices.end()) {
+						llvm::Value* fieldGEP = builder->CreateStructGEP(
+							baseInfo.llvmType, basePtr, fldIdxIt->second, innerMA->member + ".gep");
+						// Array method on a struct field
+						if (fieldBFType.substr(0, 6) == "array<") {
+							std::string eTN = fieldBFType.substr(6, fieldBFType.size() - 7);
+							TypeNode eTNode(eTN);
+							llvm::Type* eType = getLLVMType(eTNode);
+							auto* arrType = getOrCreateArrayType(eType);
+							if (memberAccess->member == "length") {
+								auto* lenPtr = builder->CreateStructGEP(arrType, fieldGEP, 1, "len.ptr");
+								return builder->CreateLoad(llvm::Type::getInt64Ty(*context), lenPtr, "len");
+							}
+							if (memberAccess->member == "push") {
+								if (expr.arguments.size() != 1)
+									throw CodeGenError("push() expects exactly 1 argument");
+								llvm::Value* val = generateExpression(*expr.arguments[0]);
+								generateArrayPush(fieldGEP, eType, val);
+								return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 0);
+							}
+							throw CodeGenError("Unknown array method: " + memberAccess->member);
+						}
+						// Struct method on a struct field: stored as pointer — load it.
+						bfType = fieldBFType;
+						objPtr = builder->CreateLoad(
+							llvm::PointerType::getUnqual(*context), fieldGEP, innerMA->member + ".ptr");
+					}
+				}
+			}
+		// IndexExpr object: arr[i].method() or this.field[i].method()
+		} else if (auto* idxExpr = dynamic_cast<const IndexExpr*>(memberAccess->object.get())) {
+			std::string arrBFType = getExprBFType(*idxExpr->object);
+			if (arrBFType.size() > 6 && arrBFType.substr(0, 6) == "array<") {
+				bfType = arrBFType.substr(6, arrBFType.size() - 7);
+				objPtr = generateIndex(*idxExpr);
+			}
 		}
 
 		// Look up the method in the struct registry.
@@ -2432,6 +3075,18 @@ llvm::Value* CodeGen::generatePrintCall(const std::vector<ExprPtr>& args) {
 			}
 		}
 
+		// Check for enum-typed expression (identifier, member access, etc.).
+		{
+			std::string argBFType = getExprBFType(*arg);
+			if (!argBFType.empty() && enumRegistry.count(argBFType)) {
+				llvm::Value* enumVal = generateExpression(*arg);
+				llvm::Value* nameStr = generateEnumToString(enumVal, argBFType);
+				llvm::Value* fmt = builder->CreateGlobalStringPtr("%s\n", "enum.fmt");
+				builder->CreateCall(printfFunc, {fmt, nameStr}, "printf");
+				continue;
+			}
+		}
+
 		// Special case: InterpolatedStringExpr inside print → use printf directly
 		if (auto* interpStr = dynamic_cast<const InterpolatedStringExpr*>(arg.get())) {
 			// Build format string with \n at the end.
@@ -2448,7 +3103,12 @@ llvm::Value* CodeGen::generatePrintCall(const std::vector<ExprPtr>& args) {
 
 				llvm::Value* val = generateExpression(*interpStr->expressions[i]);
 
-				if (val->getType()->isIntegerTy(1)) {
+				// Enum type: convert to string name.
+				std::string valBFType = getExprBFType(*interpStr->expressions[i]);
+				if (!valBFType.empty() && enumRegistry.count(valBFType)) {
+					val = generateEnumToString(val, valBFType);
+					formatStr += "%s";
+				} else if (val->getType()->isIntegerTy(1)) {
 					llvm::Value* trueStr = builder->CreateGlobalStringPtr("true", "true.str");
 					llvm::Value* falseStr = builder->CreateGlobalStringPtr("false", "false.str");
 					val = builder->CreateSelect(val, trueStr, falseStr, "boolstr");
@@ -2507,6 +3167,62 @@ llvm::Value* CodeGen::generatePrintCall(const std::vector<ExprPtr>& args) {
 	}
 
 	return llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0);
+}
+
+// ==========================
+// Input built-in
+// ==========================
+
+llvm::Value* CodeGen::generateInputCall(const std::vector<ExprPtr>& args, const std::string& targetTypeName) {
+	auto* fn = builder->GetInsertBlock()->getParent();
+	auto* i8Ptr = llvm::PointerType::getUnqual(*context);
+	auto* i32 = llvm::Type::getInt32Ty(*context);
+	auto* i64 = llvm::Type::getInt64Ty(*context);
+
+	// 1. Print the prompt if provided.
+	if (!args.empty()) {
+		llvm::Value* promptVal = generateExpression(*args[0]);
+		auto* fmtStr = builder->CreateGlobalStringPtr("%s", "input.fmt");
+		builder->CreateCall(printfFunc, {fmtStr, promptVal});
+	}
+
+	// 2. Flush all output streams via fflush(NULL) so prompt appears before blocking.
+	auto* nullFilePtr = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8Ptr));
+	builder->CreateCall(fflushFunc, {nullFilePtr});
+
+	// 3. Read input based on the target type.
+	if (targetTypeName == "int") {
+		// scanf("%d", &val) → return val as i64
+		auto* alloca = createEntryBlockAlloca(fn, "input.int", i32);
+		auto* fmt = builder->CreateGlobalStringPtr("%d", "input.int.fmt");
+		builder->CreateCall(scanfFunc, {fmt, alloca});
+		llvm::Value* val = builder->CreateLoad(i32, alloca, "input.int.val");
+		return builder->CreateSExt(val, i64, "input.int.ext");
+	}
+
+	if (targetTypeName == "float") {
+		auto* f64 = llvm::Type::getDoubleTy(*context);
+		auto* alloca = createEntryBlockAlloca(fn, "input.float", f64);
+		auto* fmt = builder->CreateGlobalStringPtr("%lf", "input.float.fmt");
+		builder->CreateCall(scanfFunc, {fmt, alloca});
+		return builder->CreateLoad(f64, alloca, "input.float.val");
+	}
+
+	if (targetTypeName == "bool") {
+		auto* alloca = createEntryBlockAlloca(fn, "input.bool", i32);
+		auto* fmt = builder->CreateGlobalStringPtr("%d", "input.bool.fmt");
+		builder->CreateCall(scanfFunc, {fmt, alloca});
+		llvm::Value* val = builder->CreateLoad(i32, alloca, "input.bool.val");
+		return builder->CreateICmpNE(val, llvm::ConstantInt::get(i32, 0), "input.bool.cmp");
+	}
+
+	// Default: string — use scanf with width-limited format to read one token.
+	// "%1023s" reads up to 1023 non-whitespace chars, null-terminates automatically.
+	constexpr int BUF_SIZE = 1024;
+	llvm::Value* buf = builder->CreateCall(mallocFunc, {llvm::ConstantInt::get(i64, BUF_SIZE)}, "input.buf");
+	auto* fmt = builder->CreateGlobalStringPtr("%1023s", "input.str.fmt");
+	builder->CreateCall(scanfFunc, {fmt, buf});
+	return buf;
 }
 
 // ==========================

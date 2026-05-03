@@ -70,6 +70,9 @@ Program Parser::parseProgram() {
 		} else if (check(TokenType::STRUCT_TOKEN)
 				   || (check(TokenType::EXPORT_TOKEN) && peek().type == TokenType::STRUCT_TOKEN)) {
 			program.structs.push_back(parseStructDecl());
+		} else if (check(TokenType::ENUM_TOKEN)
+				   || (check(TokenType::EXPORT_TOKEN) && peek().type == TokenType::ENUM_TOKEN)) {
+			program.enums.push_back(parseEnumDecl());
 		} else {
 			program.functions.push_back(parseFunctionDecl());
 		}
@@ -232,6 +235,41 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl() {
 
 	expect(TokenType::RIGHT_BRACE_TOKEN, "Expected '}' after struct body");
 	return sd;
+}
+
+// enum_declaration = [ export ] "enum" identifier "{" enum_variant { "," enum_variant } [","] "}" [ ";" ] ;
+// enum_variant = identifier ;
+std::unique_ptr<EnumDecl> Parser::parseEnumDecl() {
+	auto ed = std::make_unique<EnumDecl>();
+	ed->line = current().line;
+	ed->column = current().column;
+
+	if (match(TokenType::EXPORT_TOKEN)) {
+		ed->isExported = true;
+	}
+
+	expect(TokenType::ENUM_TOKEN, "Expected 'enum'");
+	const Token& name = expect(TokenType::IDENTIFIER_TOKEN, "Expected enum name");
+	ed->name = name.value;
+	expect(TokenType::LEFT_BRACE_TOKEN, "Expected '{' after enum name");
+
+	int32_t value = 0;
+	while (!check(TokenType::RIGHT_BRACE_TOKEN) && !isAtEnd()) {
+		const Token& variantName = expect(TokenType::IDENTIFIER_TOKEN, "Expected enum variant name");
+		EnumVariant variant;
+		variant.name = variantName.value;
+		variant.value = value++;
+		ed->variants.push_back(std::move(variant));
+
+		if (!match(TokenType::COMMA_TOKEN)) {
+			break;
+		}
+	}
+
+	expect(TokenType::RIGHT_BRACE_TOKEN, "Expected '}' after enum body");
+	// Optional trailing semicolon (common in C-style code).
+	match(TokenType::SEMICOLON_TOKEN);
+	return ed;
 }
 
 // ==========================

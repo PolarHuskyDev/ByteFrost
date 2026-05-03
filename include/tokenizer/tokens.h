@@ -50,6 +50,7 @@ enum class TokenType {
 	FROM_TOKEN,
 	AS_TOKEN,
 	OVERRIDDEN_TOKEN,
+	ENUM_TOKEN,
 
 	// Arithmetic operators
 	PLUS_TOKEN,		 // +
