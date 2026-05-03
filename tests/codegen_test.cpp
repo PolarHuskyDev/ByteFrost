@@ -794,7 +794,7 @@ TEST(CodeGenComposition, NestedStructType) {
 			return 0;
 		}
 	)");
-	assertIRContains(ir, "%Circle = type { %Point, double }");
+	assertIRContains(ir, "%Circle = type { ptr, double }");
 	assertIRContains(ir, "%Point = type { i64, i64 }");
 }
 
@@ -1333,4 +1333,252 @@ f(x: float): float { return sin(x) + cos(x); }
 	assertIRContains(ir, "define double @cos");
 	EXPECT_EQ(ir.find("llvm.sin"), std::string::npos);
 	EXPECT_EQ(ir.find("llvm.cos"), std::string::npos);
+}
+
+// =====================
+// Enum codegen
+// =====================
+
+TEST(CodeGenEnum, EnumTypeIsI32) {
+	// Enum variables should be allocated as i32.
+	std::string ir = compileToIR(R"(
+		enum Color { RED, GREEN, BLUE }
+		main(): int {
+			c: Color = Color.RED;
+			return 0;
+		}
+	)");
+	assertIRContains(ir, "alloca i32");
+}
+
+TEST(CodeGenEnum, EnumMemberAccessIsConstant) {
+	// CardRanks.ACE should compile to i32 constant 0, TWO to 1, etc.
+	std::string ir = compileToIR(R"(
+		enum CardRanks { ACE, TWO, THREE }
+		main(): int {
+			a: CardRanks = CardRanks.ACE;
+			b: CardRanks = CardRanks.TWO;
+			c: CardRanks = CardRanks.THREE;
+			return 0;
+		}
+	)");
+	assertIRContains(ir, "store i32 0");
+	assertIRContains(ir, "store i32 1");
+	assertIRContains(ir, "store i32 2");
+}
+
+TEST(CodeGenEnum, EnumWalrusDecl) {
+	std::string ir = compileToIR(R"(
+		enum Dir { NORTH, SOUTH }
+		main(): int {
+			d := Dir.NORTH;
+			return 0;
+		}
+	)");
+	assertIRContains(ir, "alloca i32");
+	assertIRContains(ir, "store i32 0");
+}
+
+TEST(CodeGenEnum, EnumComparisonSameType) {
+	// Comparing enum values of the same type should compile to icmp eq i32.
+	std::string ir = compileToIR(R"(
+		enum Color { RED, GREEN, BLUE }
+		main(): int {
+			c: Color = Color.GREEN;
+			b: bool = c == Color.GREEN;
+			return 0;
+		}
+	)");
+	assertIRContains(ir, "icmp eq i32");
+}
+
+TEST(CodeGenEnum, EnumInequalityComparison) {
+	std::string ir = compileToIR(R"(
+		enum Color { RED, GREEN, BLUE }
+		main(): int {
+			c: Color = Color.RED;
+			b: bool = c != Color.BLUE;
+			return 0;
+		}
+	)");
+	assertIRContains(ir, "icmp ne i32");
+}
+
+TEST(CodeGenEnum, EnumComparisonWithIntThrows) {
+	// Comparing an enum to a plain integer must be a compile-time error.
+	EXPECT_THROW(compileToIR(R"(
+		enum Color { RED, GREEN }
+		main(): int {
+			c: Color = Color.RED;
+			b: bool = c == 0;
+			return 0;
+		}
+	)"),
+				 CodeGenError);
+}
+
+TEST(CodeGenEnum, EnumComparisonWithStringThrows) {
+	// Comparing an enum to a string must be a compile-time error.
+	EXPECT_THROW(compileToIR(R"(
+		enum Color { RED, GREEN }
+		main(): int {
+			c: Color = Color.RED;
+			b: bool = c == "RED";
+			return 0;
+		}
+	)"),
+				 CodeGenError);
+}
+
+TEST(CodeGenEnum, CrossEnumComparisonThrows) {
+	// Comparing values from different enum types must be a compile-time error.
+	EXPECT_THROW(compileToIR(R"(
+		enum Suit { HEARTS, DIAMONDS }
+		enum Rank { ACE, TWO }
+		main(): int {
+			s: Suit = Suit.HEARTS;
+			r: Rank = Rank.ACE;
+			b: bool = s == r;
+			return 0;
+		}
+	)"),
+				 CodeGenError);
+}
+
+TEST(CodeGenEnum, EnumLiteralCrossComparisonThrows) {
+	// CardRanks.ACE == CardSuits.HEARTS must be a compile-time error.
+	EXPECT_THROW(compileToIR(R"(
+		enum CardRanks { ACE, TWO }
+		enum CardSuits { HEARTS, SPADES }
+		main(): int {
+			b: bool = CardRanks.ACE == CardSuits.HEARTS;
+			return 0;
+		}
+	)"),
+				 CodeGenError);
+}
+
+TEST(CodeGenEnum, PrintEnumVariableEmitsSwitch) {
+	// Printing an enum variable should produce a switch to select the name string.
+	std::string ir = compileToIR(R"(
+		enum Color { RED, GREEN, BLUE }
+		main(): int {
+			c: Color = Color.GREEN;
+			print(c);
+			return 0;
+		}
+	)");
+	// The switch instruction and %s format must appear in the IR.
+	assertIRContains(ir, "switch i32");
+	assertIRContains(ir, "GREEN");
+}
+
+TEST(CodeGenEnum, PrintEnumContainsAllVariantNames) {
+	// All variant name strings must be embedded in the IR.
+	std::string ir = compileToIR(R"(
+		enum CardRanks { ACE, TWO, THREE, JACK, QUEEN, KING }
+		main(): int {
+			r: CardRanks = CardRanks.ACE;
+			print(r);
+			return 0;
+		}
+	)");
+	assertIRContains(ir, "ACE");
+	assertIRContains(ir, "TWO");
+	assertIRContains(ir, "THREE");
+	assertIRContains(ir, "JACK");
+	assertIRContains(ir, "QUEEN");
+	assertIRContains(ir, "KING");
+}
+
+TEST(CodeGenEnum, EnumInInterpolatedString) {
+	// Enum values inside interpolated strings should be converted to their names.
+	std::string ir = compileToIR(R"(
+		enum Color { RED, GREEN, BLUE }
+		main(): int {
+			c: Color = Color.RED;
+			s: string = "color is {c}";
+			return 0;
+		}
+	)");
+	assertIRContains(ir, "switch i32");
+	assertIRContains(ir, "RED");
+}
+
+TEST(CodeGenEnum, StructWithEnumField) {
+	// Struct with an enum-typed field should store it as i32.
+	std::string ir = compileToIR(R"(
+		enum Suit { HEARTS, DIAMONDS, CLUBS, SPADES }
+		struct Card { suit: Suit; }
+		main(): int {
+			c: Card = { suit: SPADES };
+			return 0;
+		}
+	)");
+	assertIRContains(ir, "store i32 3");  // SPADES = 3
+}
+
+TEST(CodeGenEnum, StructWithEnumFieldQualified) {
+	// Using qualified enum variant in struct initializer.
+	std::string ir = compileToIR(R"(
+		enum Suit { HEARTS, DIAMONDS, CLUBS, SPADES }
+		struct Card { suit: Suit; }
+		main(): int {
+			c: Card = { suit: Suit.HEARTS };
+			return 0;
+		}
+	)");
+	assertIRContains(ir, "store i32 0");  // HEARTS = 0
+}
+
+TEST(CodeGenEnum, StructEnumFieldInInterpolation) {
+	// Struct method using interpolated string with enum field should resolve name.
+	std::string ir = compileToIR(R"(
+		enum CardRanks { ACE, TWO, THREE, FOUR, FIVE, SIX, SEVEN, EIGHT, NINE, TEN, JACK, QUEEN, KING }
+		enum CardSuits { HEARTS, DIAMONDS, CLUBS, SPADES }
+		struct Card {
+			rank: CardRanks;
+			suit: CardSuits;
+			toString(): string {
+				return "{this.rank} of {this.suit}";
+			}
+		}
+		main(): int {
+			card1: Card = { rank: ACE, suit: SPADES };
+			print(card1.toString());
+			return 0;
+		}
+	)");
+	// The toString method should generate switch-based enum-to-string calls.
+	assertIRContains(ir, "switch i32");
+	assertIRContains(ir, "ACE");
+	assertIRContains(ir, "SPADES");
+}
+
+TEST(CodeGenEnum, EnumInIfCondition) {
+	// Enum comparison in if condition.
+	std::string ir = compileToIR(R"(
+		enum Color { RED, GREEN, BLUE }
+		main(): int {
+			c: Color = Color.RED;
+			if (c == Color.RED) {
+				return 1;
+			}
+			return 0;
+		}
+	)");
+	assertIRContains(ir, "icmp eq i32");
+	assertIRContains(ir, "if.then");
+}
+
+TEST(CodeGenEnum, UnknownEnumVariantThrows) {
+	// Accessing a non-existent variant should throw at compile time.
+	EXPECT_THROW(compileToIR(R"(
+		enum Color { RED, GREEN }
+		main(): int {
+			c: Color = Color.PURPLE;
+			return 0;
+		}
+	)"),
+				 CodeGenError);
 }

@@ -1320,3 +1320,80 @@ TEST(ParserOverridden, RegularFunctionNotOverridden) {
 	ASSERT_EQ(program.functions.size(), 1u);
 	EXPECT_FALSE(program.functions[0]->isOverridden);
 }
+
+// ============================================================
+// Enum declarations
+// ============================================================
+
+TEST(ParserEnum, BasicEnumDeclaration) {
+	auto program = parse(R"(
+		enum Color { RED, GREEN, BLUE }
+		main(): int { return 0; }
+	)");
+	ASSERT_EQ(program.enums.size(), 1u);
+	EXPECT_EQ(program.enums[0]->name, "Color");
+	ASSERT_EQ(program.enums[0]->variants.size(), 3u);
+	EXPECT_EQ(program.enums[0]->variants[0].name, "RED");
+	EXPECT_EQ(program.enums[0]->variants[0].value, 0);
+	EXPECT_EQ(program.enums[0]->variants[1].name, "GREEN");
+	EXPECT_EQ(program.enums[0]->variants[1].value, 1);
+	EXPECT_EQ(program.enums[0]->variants[2].name, "BLUE");
+	EXPECT_EQ(program.enums[0]->variants[2].value, 2);
+}
+
+TEST(ParserEnum, EnumWithTrailingSemicolon) {
+	// C-style trailing ; after } is accepted but optional.
+	auto program = parse(R"(
+		enum Dir { NORTH, SOUTH, EAST, WEST };
+		main(): int { return 0; }
+	)");
+	ASSERT_EQ(program.enums.size(), 1u);
+	EXPECT_EQ(program.enums[0]->name, "Dir");
+	ASSERT_EQ(program.enums[0]->variants.size(), 4u);
+}
+
+TEST(ParserEnum, ExportedEnum) {
+	auto program = parse(R"(
+		export enum Status { OK, ERROR }
+		main(): int { return 0; }
+	)");
+	ASSERT_EQ(program.enums.size(), 1u);
+	EXPECT_TRUE(program.enums[0]->isExported);
+	EXPECT_EQ(program.enums[0]->name, "Status");
+}
+
+TEST(ParserEnum, EnumValuesAreAutoAssigned) {
+	auto program = parse(R"(
+		enum Rank { JACK, QUEEN, KING }
+		main(): int { return 0; }
+	)");
+	ASSERT_EQ(program.enums.size(), 1u);
+	const auto& variants = program.enums[0]->variants;
+	ASSERT_EQ(variants.size(), 3u);
+	EXPECT_EQ(variants[0].value, 0);
+	EXPECT_EQ(variants[1].value, 1);
+	EXPECT_EQ(variants[2].value, 2);
+}
+
+TEST(ParserEnum, MultipleEnums) {
+	auto program = parse(R"(
+		enum Suit { HEARTS, DIAMONDS, CLUBS, SPADES }
+		enum Rank { ACE, TWO, THREE }
+		main(): int { return 0; }
+	)");
+	ASSERT_EQ(program.enums.size(), 2u);
+	EXPECT_EQ(program.enums[0]->name, "Suit");
+	EXPECT_EQ(program.enums[1]->name, "Rank");
+}
+
+TEST(ParserEnum, StructWithEnumFields) {
+	auto program = parse(R"(
+		enum Suit { HEARTS, DIAMONDS }
+		struct Card { suit: Suit; }
+		main(): int { return 0; }
+	)");
+	ASSERT_EQ(program.enums.size(), 1u);
+	ASSERT_EQ(program.structs.size(), 1u);
+	ASSERT_EQ(program.structs[0]->members.size(), 1u);
+	EXPECT_EQ(program.structs[0]->members[0].fieldType->name, "Suit");
+}

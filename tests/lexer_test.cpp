@@ -585,3 +585,34 @@ TEST(LexerModuleKeywords, KeywordsNotConfusedWithIdentifiers) {
 			<< "Token " << i << " (\"" << tokens[i].value << "\") should be IDENTIFIER";
 	}
 }
+
+// ============================================================
+// Enum keyword
+// ============================================================
+
+TEST(LexerEnum, EnumKeyword) {
+	auto tokens = lex("enum");
+	ASSERT_EQ(tokens.size(), 2u);
+	expectToken(tokens[0], TokenType::ENUM_TOKEN, "enum");
+}
+
+TEST(LexerEnum, EnumDeclaration) {
+	auto tokens = lex("enum CardRanks { ACE, TWO, THREE }");
+	ASSERT_GE(tokens.size(), 8u);
+	expectToken(tokens[0], TokenType::ENUM_TOKEN, "enum");
+	expectToken(tokens[1], TokenType::IDENTIFIER_TOKEN, "CardRanks");
+	expectToken(tokens[2], TokenType::LEFT_BRACE_TOKEN, "{");
+	expectToken(tokens[3], TokenType::IDENTIFIER_TOKEN, "ACE");
+	expectToken(tokens[4], TokenType::COMMA_TOKEN, ",");
+	expectToken(tokens[5], TokenType::IDENTIFIER_TOKEN, "TWO");
+	expectToken(tokens[6], TokenType::COMMA_TOKEN, ",");
+	expectToken(tokens[7], TokenType::IDENTIFIER_TOKEN, "THREE");
+}
+
+TEST(LexerEnum, EnumNotConfusedWithIdentifier) {
+	// "enums" and "enumerate" should remain IDENTIFIER tokens.
+	auto tokens = lex("enums enumerate");
+	ASSERT_EQ(tokens.size(), 3u);
+	expectToken(tokens[0], TokenType::IDENTIFIER_TOKEN, "enums");
+	expectToken(tokens[1], TokenType::IDENTIFIER_TOKEN, "enumerate");
+}

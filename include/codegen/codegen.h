@@ -47,6 +47,14 @@ class CodeGen {
 	/// Used by orca to satisfy cross-module call sites before codegen.
 	void declareExternFunction(const FunctionDecl& fn);
 
+	/// Pre-register an exported enum type from an imported module.
+	/// Must be called before declareExternStruct for structs that reference this enum.
+	void declareExternEnum(const EnumDecl& ed);
+
+	/// Pre-register an exported struct type from an imported module.
+	/// All enum and struct types referenced by its fields must be declared first.
+	void declareExternStruct(const StructDecl& sd);
+
 	/// Access the module (for unit testing).
 	llvm::Module& getModule() {
 		return *module;
@@ -82,6 +90,8 @@ class CodeGen {
 	llvm::Function* reallocFunc = nullptr;
 	llvm::Function* freeFunc = nullptr;
 	llvm::Function* snprintfFunc = nullptr;
+	llvm::Function* scanfFunc = nullptr;
+	llvm::Function* fflushFunc = nullptr;
 
 	// Names of stdlib math functions overridden by the current program.
 	std::set<std::string> overriddenMathFuncs_;
@@ -101,9 +111,17 @@ class CodeGen {
 		std::vector<llvm::Type*> fieldLLVMTypes;
 		std::map<std::string, size_t> fieldIndices;
 		std::map<std::string, std::string> methods;	 // method name -> mangled LLVM function name
+		std::map<std::string, std::string> fieldBFTypeNames;  // field name -> BF type name (for enums)
 		bool hasConstructor = false;
 	};
 	std::map<std::string, StructInfo> structRegistry;
+
+	// Enum type registry.
+	struct EnumInfo {
+		std::map<std::string, int32_t> variants;  // variant name -> integer value
+		std::vector<std::string> variantNames;    // ordered list (index == value)
+	};
+	std::map<std::string, EnumInfo> enumRegistry;
 
 	// Target setup.
 	void initializeTarget();
@@ -143,11 +161,18 @@ class CodeGen {
 	void generateStructInit(const StructInitExpr& expr, llvm::Value* basePtr, const std::string& structName);
 	std::pair<llvm::Value*, std::string> resolveStructBase(const Expression& expr);
 
+	// Enum support.
+	void registerEnumTypes(const Program& program);
+	/// Get the ByteFrost type name (e.g. "CardRanks") for a given expression, or "" if unknown.
+	std::string getExprBFType(const Expression& expr);
+	/// Given an i32 enum value, return an i8* pointing to the variant's name string.
+	llvm::Value* generateEnumToString(llvm::Value* enumVal, const std::string& enumTypeName);
+
 	// Array support.
 	llvm::StructType* getOrCreateArrayType(llvm::Type* elemType);
 	llvm::Value* generateArrayLiteral(const ArrayLiteralExpr& expr, llvm::Type* elemType);
 	llvm::Value* generateEmptyArray(llvm::Type* elemType);
-	void generateArrayPush(llvm::AllocaInst* arrAlloca, llvm::Type* elemType, llvm::Value* value);
+void generateArrayPush(llvm::Value* arrPtr, llvm::Type* elemType, llvm::Value* value);
 
 	// Map support.
 	llvm::StructType* getOrCreateMapType(llvm::Type* keyType, llvm::Type* valType);
@@ -159,6 +184,11 @@ class CodeGen {
 
 	// Built-in print handling.
 	llvm::Value* generatePrintCall(const std::vector<ExprPtr>& args);
+
+	// Built-in input handling.
+	/// Generate an input() call that reads from stdin.
+	/// targetTypeName: the BF type name the result is being stored into ("int", "float", "bool", "string", "").
+	llvm::Value* generateInputCall(const std::vector<ExprPtr>& args, const std::string& targetTypeName);
 
 	// Math stdlib dispatch.
 	llvm::Value* generateMathCall(const std::string& name, const std::vector<ExprPtr>& args);

@@ -289,6 +289,21 @@ struct StructMember {
 	std::unique_ptr<FunctionDecl> method;
 };
 
+// Enum variant: a named constant with an integer value.
+struct EnumVariant {
+	std::string name;
+	int32_t value;
+};
+
+// Enum declaration: enum CardRanks { ACE, TWO, THREE };
+struct EnumDecl {
+	std::string name;
+	std::vector<EnumVariant> variants;
+	bool isExported = false;
+	int line = 0;
+	int column = 0;
+};
+
 struct StructDecl {
 	std::string name;
 	std::vector<StructMember> members;
@@ -305,4 +320,5 @@ struct Program {
 	std::vector<std::unique_ptr<ImportDecl>> imports;
 	std::vector<std::unique_ptr<FunctionDecl>> functions;
 	std::vector<std::unique_ptr<StructDecl>> structs;
+	std::vector<std::unique_ptr<EnumDecl>> enums;
 };

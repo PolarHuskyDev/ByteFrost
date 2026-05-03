@@ -1,0 +1,10 @@
+[project]
+name    = "blackjack"
+version = "0.1.0"
+entry   = "src/main.bf"
+
+[profile.debug]
+opt = 0          # 0, 1, 2, 3, "s" (size), "z" (aggressive size)
+
+[profile.release]
+opt = 2

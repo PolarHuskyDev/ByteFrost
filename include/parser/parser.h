@@ -27,6 +27,7 @@ class Parser {
 	std::unique_ptr<ImportDecl> parseImportDecl();
 	std::unique_ptr<FunctionDecl> parseFunctionDecl();
 	std::unique_ptr<StructDecl> parseStructDecl();
+	std::unique_ptr<EnumDecl> parseEnumDecl();
 
 	// Types
 	std::unique_ptr<TypeNode> parseType();
