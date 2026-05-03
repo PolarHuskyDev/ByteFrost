@@ -180,7 +180,7 @@ jobs:
           echo "=== SHA256SUMS ===" && cat SHA256SUMS
 
       - name: Create GitHub Release
-          uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v3
         with:
           name: "ByteFrost v${{ env.BF_VERSION }}"
           tag_name: ${{ github.ref_name }}
