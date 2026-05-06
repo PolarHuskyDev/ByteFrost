@@ -15,10 +15,7 @@ export struct BlackJack {
             CardRanks.SEVEN => { v = 7;  }
             CardRanks.EIGHT => { v = 8;  }
             CardRanks.NINE  => { v = 9;  }
-            CardRanks.TEN   => { v = 10; }
-            CardRanks.JACK  => { v = 10; }
-            CardRanks.QUEEN => { v = 10; }
-            CardRanks.KING  => { v = 10; }
+            CardRanks.TEN | CardRanks.JACK | CardRanks.QUEEN | CardRanks.KING => { v = 10; }
             CardRanks.ACE   => { v = 11; }
             _ => { v = 0; }
         }
