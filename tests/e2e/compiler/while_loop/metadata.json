@@ -1,0 +1,7 @@
+{
+  "id": "while_loop",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "While loop progression",
+  "timeoutSeconds": 10
+}

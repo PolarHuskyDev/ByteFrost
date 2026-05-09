@@ -1,0 +1,7 @@
+{
+  "id": "constructor",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Struct constructor usage",
+  "timeoutSeconds": 10
+}

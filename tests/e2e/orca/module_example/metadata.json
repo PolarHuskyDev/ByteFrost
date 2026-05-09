@@ -1,0 +1,7 @@
+{
+  "id": "module_example",
+  "target": "orca",
+  "kind": "orca-positive",
+  "description": "Cross-module import/export project",
+  "timeoutSeconds": 30
+}

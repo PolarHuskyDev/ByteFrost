@@ -1,0 +1,7 @@
+{
+  "id": "orca_check_valid",
+  "target": "orca",
+  "kind": "orca-check-pass",
+  "description": "orca check should pass for valid project",
+  "timeoutSeconds": 30
+}

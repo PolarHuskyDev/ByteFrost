@@ -1,0 +1,7 @@
+{
+  "id": "struct",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Struct field access and method call",
+  "timeoutSeconds": 10
+}

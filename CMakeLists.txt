@@ -36,6 +36,14 @@ add_library(
 	src/parser/parser.cpp
 	src/codegen/codegen.cpp
 	src/module_resolver/module_resolver.cpp
+	# Semantic layer (Phase 1)
+	src/bytefrost/diagnostics/diagnostic_engine.cpp
+	src/bytefrost/semantic/bf_type.cpp
+	src/bytefrost/semantic/symbol_table.cpp
+	src/bytefrost/semantic/type_resolver.cpp
+	src/bytefrost/semantic/type_checker.cpp
+	src/bytefrost/semantic/semantic_context.cpp
+	src/bytefrost/hir/hir_builder.cpp
 	# Linker: select the platform-specific implementation at configure time.
 	$<IF:$<BOOL:${WIN32}>,src/linker/linker_pe.cpp,src/linker/linker_elf.cpp>
 )
@@ -73,6 +81,8 @@ add_executable(
 	tests/lexer_test.cpp
 	tests/parser_test.cpp
 	tests/codegen_test.cpp
+	tests/semantic_test.cpp
+	tests/hir_builder_test.cpp
 )
 
 target_link_libraries(unit_tests byte_frost_lib GTest::gtest GTest::gtest_main)

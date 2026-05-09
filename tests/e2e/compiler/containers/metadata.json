@@ -1,0 +1,7 @@
+{
+  "id": "containers",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Array and map operations",
+  "timeoutSeconds": 10
+}

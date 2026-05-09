@@ -1,0 +1,7 @@
+{
+  "id": "missing_module",
+  "target": "orca",
+  "kind": "orca-negative",
+  "description": "Missing module import must fail",
+  "timeoutSeconds": 30
+}

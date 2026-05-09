@@ -1,0 +1,7 @@
+{
+  "id": "enum_int_compare",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Reject enum vs integer comparison",
+  "timeoutSeconds": 10
+}

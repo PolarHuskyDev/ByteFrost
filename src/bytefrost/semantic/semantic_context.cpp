@@ -1,0 +1,676 @@
+#include "bytefrost/semantic/semantic_context.h"
+
+#include <functional>
+#include <map>
+#include <set>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+namespace bytefrost {
+
+// -----------------------------------------------------------------------
+// stdlib math names (mirrors the set in CodeGen)
+// -----------------------------------------------------------------------
+
+const std::set<std::string>& SemanticContext::stdlibMathNames() {
+	static const std::set<std::string> names = {
+		"sin", "cos", "tan", "sqrt", "pow", "floor", "ceil", "round",
+		"abs", "log", "log2", "log10", "exp", "min", "max"};
+	return names;
+}
+
+// -----------------------------------------------------------------------
+// Construction
+// -----------------------------------------------------------------------
+
+SemanticContext::SemanticContext()
+	: checker_(resolver_) {}
+
+// -----------------------------------------------------------------------
+// Top-level entry point
+// -----------------------------------------------------------------------
+
+bool SemanticContext::analyze(const Program& program,
+                              const std::string& sourceFile) {
+	sourceFile_ = sourceFile;
+	diag_.clear();
+
+	// Pass 1: register all top-level names so forward references inside
+	// function bodies resolve correctly.
+	collectTopLevelDecls(program);
+	checkDuplicateDecls(program);
+	checkImportConflicts(program);
+	checkMathOverrides(program);
+	checkStructCycles(program);
+	checkUninitializedStructFields(program);
+
+	// Stop early — structural errors make body analysis unreliable.
+	if (diag_.hasErrors())
+		return false;
+
+	// Pass 2: analyse function bodies.
+	analyzeFunctions(program);
+	analyzeStructMethods(program);
+
+	return !diag_.hasErrors();
+}
+
+// -----------------------------------------------------------------------
+// Pass 1 helpers
+// -----------------------------------------------------------------------
+
+void SemanticContext::collectTopLevelDecls(const Program& program) {
+	for (const auto& ed : program.enums) {
+		resolver_.registerEnum(ed->name);
+		// Register each variant name so unqualified uses (e.g. SPADES) are valid.
+		for (const auto& v : ed->variants)
+			resolver_.registerEnumVariant(v.name, ed->name);
+	}
+	for (const auto& sd : program.structs) {
+		resolver_.registerStruct(sd->name);
+	}
+	// Collect local names brought in by import statements.  We can't know
+	// whether they're enums, structs, or functions without loading the imported
+	// module, so we just record the names to suppress false-positive errors.
+	for (const auto& imp : program.imports) {
+		for (const auto& item : imp->items) {
+			const std::string& localName = item.alias.empty() ? item.name : item.alias;
+			importedNames_.insert(localName);
+		}
+	}
+	// Register top-level functions in the global scope.
+	for (const auto& fn : program.functions) {
+		if (scopes_.isDeclaredInCurrentScope(fn->name))
+			continue;  // duplicates reported separately
+		BFType retType = fn->returnType ? resolver_.resolve(*fn->returnType)
+		                               : BFType::makeVoid();
+		scopes_.declare(fn->name, {fn->name, retType, true, false,
+		                           loc(fn->line, fn->column)});
+	}
+}
+
+void SemanticContext::checkDuplicateDecls(const Program& program) {
+	// Enum names
+	std::unordered_map<std::string, int> enumLines;
+	for (const auto& ed : program.enums) {
+		if (enumLines.count(ed->name)) {
+			diag_.error(loc(ed->line, ed->column),
+			            "duplicate enum declaration '" + ed->name + "'")
+			    .addNote(loc(enumLines[ed->name], 0),
+			             "first declared here");
+		} else {
+			enumLines[ed->name] = ed->line;
+		}
+	}
+
+	// Struct names (also check collision with enum names)
+	std::unordered_map<std::string, int> structLines;
+	for (const auto& sd : program.structs) {
+		if (structLines.count(sd->name)) {
+			diag_.error(loc(sd->line, sd->column),
+			            "duplicate struct declaration '" + sd->name + "'")
+			    .addNote(loc(structLines[sd->name], 0), "first declared here");
+		} else if (enumLines.count(sd->name)) {
+			diag_.error(loc(sd->line, sd->column),
+			            "'" + sd->name + "' is already declared as an enum");
+		} else {
+			structLines[sd->name] = sd->line;
+		}
+	}
+
+	// Top-level function names
+	std::unordered_map<std::string, int> fnLines;
+	for (const auto& fn : program.functions) {
+		if (fnLines.count(fn->name)) {
+			diag_.error(loc(fn->line, fn->column),
+			            "duplicate function declaration '" + fn->name + "'")
+			    .addNote(loc(fnLines[fn->name], 0), "first declared here");
+		} else {
+			fnLines[fn->name] = fn->line;
+		}
+	}
+}
+
+void SemanticContext::checkImportConflicts(const Program& program) {
+	// An unaliased import of a stdlib math name creates an ambiguous call site.
+	for (const auto& imp : program.imports) {
+		for (const auto& item : imp->items) {
+			if (item.alias.empty() && stdlibMathNames().count(item.name)) {
+				diag_.error(loc(imp->line, imp->column),
+				            "importing '" + item.name +
+				                "' conflicts with the stdlib math function of the same name; "
+				                "use an alias: import " + item.name + " as <alias> from ...");
+			}
+		}
+	}
+}
+
+void SemanticContext::checkMathOverrides(const Program& program) {
+	for (const auto& fn : program.functions) {
+		if (stdlibMathNames().count(fn->name) && !fn->isOverridden) {
+			diag_.error(loc(fn->line, fn->column),
+			            "function '" + fn->name +
+			                "' conflicts with a stdlib math function; "
+			                "add 'overridden' to shadow it intentionally");
+		}
+	}
+}
+
+void SemanticContext::checkStructCycles(const Program& program) {
+	// Build adjacency: struct name -> field type names that are also structs.
+	std::unordered_map<std::string, std::vector<std::string>> deps;
+	std::unordered_map<std::string, int> declLine;
+	for (const auto& sd : program.structs) {
+		declLine[sd->name] = sd->line;
+		auto& d = deps[sd->name];
+		for (const auto& m : sd->members) {
+			if (m.kind == StructMember::FIELD &&
+			    resolver_.isKnownStruct(m.fieldType->name)) {
+				d.push_back(m.fieldType->name);
+			}
+		}
+	}
+
+	std::set<std::string> visited, inStack;
+	std::function<void(const std::string&, std::vector<std::string>&)> dfs =
+		[&](const std::string& name, std::vector<std::string>& path) {
+			if (inStack.count(name)) {
+				std::string cycle;
+				bool inCycle = false;
+				for (const auto& p : path) {
+					if (p == name) inCycle = true;
+					if (inCycle) cycle += p + " -> ";
+				}
+				cycle += name;
+				int line = declLine.count(name) ? declLine.at(name) : 0;
+				diag_.error(loc(line, 0),
+				            "Cyclic struct dependency: " + cycle +
+				                " (structs are value types; use Box<T> for indirection)");
+				return;
+			}
+			if (visited.count(name)) return;
+			visited.insert(name);
+			inStack.insert(name);
+			path.push_back(name);
+			if (deps.count(name)) {
+				for (const auto& dep : deps.at(name)) {
+					dfs(dep, path);
+				}
+			}
+			path.pop_back();
+			inStack.erase(name);
+		};
+
+	for (const auto& sd : program.structs) {
+		std::vector<std::string> path;
+		dfs(sd->name, path);
+	}
+}
+
+// -----------------------------------------------------------------------
+// Check: struct fields of struct type must be initialized in a constructor
+// -----------------------------------------------------------------------
+//
+// Rule: if a struct S has a field `f: T` where T is a locally-declared
+// struct (not imported), S MUST have a constructor that assigns `this.f`.
+// If S has no constructor at all, every such field is flagged.
+// Imported struct types are excluded because we can't inspect their
+// constructors without loading the imported module.
+//
+// Helper: collect all field names directly assigned via `this.name = …`
+// anywhere in a statement list (recursively, but not into nested closures).
+static void collectThisAssignments(const std::vector<std::unique_ptr<Statement>>& stmts,
+                                   std::set<std::string>& assigned) {
+	for (const auto& stmt : stmts) {
+		// AssignStmt: target may be `this.field` or `this.field.subfield` etc.
+		if (auto* as = dynamic_cast<const AssignStmt*>(stmt.get())) {
+			if (auto* ma = dynamic_cast<const MemberAccessExpr*>(as->target.get())) {
+				if (dynamic_cast<const ThisExpr*>(ma->object.get())) {
+					assigned.insert(ma->member);
+				}
+			}
+		}
+		// Walk into if/while/for bodies.
+		if (auto* ifs = dynamic_cast<const IfStmt*>(stmt.get())) {
+			collectThisAssignments(ifs->thenBlock.statements, assigned);
+			if (ifs->elseBlock)
+				collectThisAssignments(ifs->elseBlock->statements, assigned);
+		}
+		if (auto* ws = dynamic_cast<const WhileStmt*>(stmt.get())) {
+			collectThisAssignments(ws->body.statements, assigned);
+		}
+		if (auto* fs = dynamic_cast<const ForStmt*>(stmt.get())) {
+			collectThisAssignments(fs->body.statements, assigned);
+		}
+	}
+}
+
+void SemanticContext::checkUninitializedStructFields(const Program& program) {
+	// Build the set of locally-declared struct names (not from imports).
+	std::unordered_set<std::string> localStructs;
+	for (const auto& sd : program.structs)
+		localStructs.insert(sd->name);
+
+	for (const auto& sd : program.structs) {
+		// Collect fields whose type is a locally-known struct.
+		std::vector<std::pair<std::string, int>> structFields;  // (name, line)
+		for (const auto& m : sd->members) {
+			if (m.kind != StructMember::FIELD)
+				continue;
+			if (!m.fieldType)
+				continue;
+			if (localStructs.count(m.fieldType->name))
+				structFields.emplace_back(m.fieldName, 0);
+		}
+
+		if (structFields.empty())
+			continue;
+
+		// Find the constructor method, if any.  If no constructor exists,
+		// the struct is expected to be initialized via struct-literal syntax
+		// ({ field: val, … }) which is validated at the call site by CodeGen.
+		// We only check when a constructor IS present.
+		const FunctionDecl* ctor = nullptr;
+		for (const auto& m : sd->members) {
+			if (m.kind == StructMember::METHOD && m.method &&
+			    m.method->name == "constructor") {
+				ctor = m.method.get();
+				break;
+			}
+		}
+
+		if (!ctor)
+			continue;
+
+		// Has a constructor: check each struct-typed field is assigned.
+		std::set<std::string> assigned;
+		collectThisAssignments(ctor->body.statements, assigned);
+
+		for (const auto& [fname, fline] : structFields) {
+			if (!assigned.count(fname)) {
+				diag_.error(loc(ctor->line, ctor->column),
+				            "constructor of '" + sd->name + "' does not initialize "
+				                "field '" + fname + "' of struct type; "
+				                "assign 'this." + fname + "' before use");
+			}
+		}
+	}
+}
+
+// -----------------------------------------------------------------------
+// Pass 2: function body analysis
+// -----------------------------------------------------------------------
+
+void SemanticContext::analyzeFunctions(const Program& program) {
+	for (const auto& fn : program.functions) {
+		analyzeFunction(*fn, "");
+	}
+}
+
+void SemanticContext::analyzeStructMethods(const Program& program) {
+	for (const auto& sd : program.structs) {
+		for (const auto& m : sd->members) {
+			if (m.kind == StructMember::METHOD) {
+				analyzeFunction(*m.method, sd->name);
+			}
+		}
+	}
+}
+
+void SemanticContext::analyzeFunction(const FunctionDecl& fn,
+                                      const std::string& thisTypeName) {
+	scopes_.pushScope();
+
+	// Inject 'this' for methods.
+	if (!thisTypeName.empty()) {
+		scopes_.declare("this", {"this", BFType::makeStruct(thisTypeName),
+		                         false, false, {}});
+	}
+
+	// Declare parameters.
+	for (const auto& param : fn.params) {
+		BFType pType = param.type ? resolver_.resolve(*param.type)
+		                          : BFType::makeUnknown();
+		if (pType.isUnknown() && param.type &&
+		    !importedNames_.count(param.type->name)) {
+			diag_.error(loc(fn.line, fn.column),
+			            "unknown type '" + param.type->name +
+			                "' for parameter '" + param.name + "'");
+		}
+		scopes_.declare(param.name, {param.name, pType, true, false,
+		                             loc(fn.line, fn.column)});
+	}
+
+	analyzeBlock(fn.body);
+	scopes_.popScope();
+}
+
+void SemanticContext::analyzeBlock(const Block& block) {
+	scopes_.pushScope();
+	for (const auto& stmt : block.statements) {
+		analyzeStatement(*stmt);
+	}
+	scopes_.popScope();
+}
+
+// -----------------------------------------------------------------------
+// Statement analysis
+// -----------------------------------------------------------------------
+
+void SemanticContext::analyzeStatement(const Statement& stmt) {
+	if (auto* s = dynamic_cast<const VarDeclStmt*>(&stmt)) {
+		BFType initType = BFType::makeUnknown();
+		if (s->initializer) {
+			initType = analyzeExpression(*s->initializer);
+		}
+
+		BFType declType = BFType::makeUnknown();
+		if (s->type) {
+			declType = resolver_.resolve(*s->type);
+			if (declType.isUnknown() &&
+			    !importedNames_.count(s->type->name)) {
+				diag_.error(loc(s->line, s->column),
+				            "unknown type '" + s->type->name + "'");
+			}
+			// Check initializer is compatible with declared type.
+			if (s->initializer && !initType.isUnknown() && !declType.isUnknown()) {
+				if (!checker_.isAssignable(initType, declType)) {
+					diag_.error(loc(s->line, s->column),
+					            "cannot assign value of type '" + initType.toString() +
+					                "' to variable of type '" + declType.toString() + "'");
+				}
+			}
+		} else {
+			// Walrus / inferred: use initializer type.
+			declType = initType;
+		}
+
+		// Check for shadowing in the same scope.
+		if (scopes_.isDeclaredInCurrentScope(s->name)) {
+			diag_.error(loc(s->line, s->column),
+			            "variable '" + s->name + "' already declared in this scope");
+		} else {
+			scopes_.declare(s->name, {s->name, declType, true, false,
+			                          loc(s->line, s->column)});
+		}
+		return;
+	}
+
+	if (auto* s = dynamic_cast<const AssignStmt*>(&stmt)) {
+		BFType rhs = analyzeExpression(*s->value);
+		BFType lhs = analyzeExpression(*s->target);
+		if (!lhs.isUnknown() && !rhs.isUnknown()) {
+			if (!checker_.isAssignable(rhs, lhs)) {
+				diag_.error(loc(s->line, s->column),
+				            "cannot assign '" + rhs.toString() + "' to '" +
+				                lhs.toString() + "'");
+			}
+		}
+		return;
+	}
+
+	if (auto* s = dynamic_cast<const IfStmt*>(&stmt)) {
+		BFType cond = analyzeExpression(*s->condition);
+		if (!cond.isUnknown() && !cond.isBool()) {
+			diag_.error(loc(s->line, s->column),
+			            "if condition must be bool, got '" + cond.toString() + "'");
+		}
+		analyzeBlock(s->thenBlock);
+		for (const auto& [eicond, eibody] : s->elseIfBlocks) {
+			BFType eiType = analyzeExpression(*eicond);
+			if (!eiType.isUnknown() && !eiType.isBool()) {
+				diag_.error(loc(s->line, s->column),
+				            "elseif condition must be bool, got '" + eiType.toString() + "'");
+			}
+			analyzeBlock(eibody);
+		}
+		if (s->elseBlock) analyzeBlock(*s->elseBlock);
+		return;
+	}
+
+	if (auto* s = dynamic_cast<const WhileStmt*>(&stmt)) {
+		BFType cond = analyzeExpression(*s->condition);
+		if (!cond.isUnknown() && !cond.isBool()) {
+			diag_.error(loc(s->line, s->column),
+			            "while condition must be bool, got '" + cond.toString() + "'");
+		}
+		analyzeBlock(s->body);
+		return;
+	}
+
+	if (auto* s = dynamic_cast<const ForStmt*>(&stmt)) {
+		scopes_.pushScope();
+		if (s->init)      analyzeStatement(*s->init);
+		if (s->condition) analyzeExpression(*s->condition);
+		if (s->update)    analyzeExpression(*s->update);
+		analyzeBlock(s->body);
+		scopes_.popScope();
+		return;
+	}
+
+	if (auto* s = dynamic_cast<const ForInStmt*>(&stmt)) {
+		scopes_.pushScope();
+		BFType varType = s->varType ? resolver_.resolve(*s->varType)
+		                            : BFType::makeInt();
+		scopes_.declare(s->varName, {s->varName, varType, true, false,
+		                             loc(s->line, s->column)});
+		if (s->rangeStart) analyzeExpression(*s->rangeStart);
+		if (s->rangeEnd)   analyzeExpression(*s->rangeEnd);
+		analyzeBlock(s->body);
+		scopes_.popScope();
+		return;
+	}
+
+	if (auto* s = dynamic_cast<const MatchStmt*>(&stmt)) {
+		analyzeExpression(*s->subject);
+		for (const auto& c : s->cases) {
+			for (const auto& p : c.patterns) analyzeExpression(*p);
+			analyzeBlock(c.body);
+		}
+		return;
+	}
+
+	if (auto* s = dynamic_cast<const ReturnStmt*>(&stmt)) {
+		if (s->value) analyzeExpression(*s->value);
+		return;
+	}
+
+	if (auto* s = dynamic_cast<const ExprStmt*>(&stmt)) {
+		analyzeExpression(*s->expression);
+		return;
+	}
+
+	// BreakStmt / ContinueStmt: no type work needed.
+}
+
+// -----------------------------------------------------------------------
+// Expression analysis
+// -----------------------------------------------------------------------
+
+BFType SemanticContext::analyzeExpression(const Expression& expr) {
+	if (dynamic_cast<const IntLiteralExpr*>(&expr))
+		return BFType::makeInt();
+	if (dynamic_cast<const FloatLiteralExpr*>(&expr))
+		return BFType::makeFloat();
+	if (dynamic_cast<const StringLiteralExpr*>(&expr))
+		return BFType::makeString();
+	if (dynamic_cast<const BoolLiteralExpr*>(&expr))
+		return BFType::makeBool();
+	if (dynamic_cast<const CharLiteralExpr*>(&expr))
+		return BFType::makeChar();
+	if (dynamic_cast<const NullLiteralExpr*>(&expr))
+		return BFType::makeUnknown();  // null is compatible with any nullable
+	if (dynamic_cast<const InterpolatedStringExpr*>(&expr)) {
+		const auto& interp = *dynamic_cast<const InterpolatedStringExpr*>(&expr);
+		for (const auto& e : interp.expressions) analyzeExpression(*e);
+		return BFType::makeString();
+	}
+	if (dynamic_cast<const ThisExpr*>(&expr)) {
+		const auto* sym = scopes_.lookup("this");
+		return sym ? sym->type : BFType::makeUnknown();
+	}
+
+	if (auto* e = dynamic_cast<const IdentifierExpr*>(&expr)) {
+		// Enum type name used as a namespace (e.g. CardRanks.ACE handled below)
+		if (resolver_.isKnownEnum(e->name))
+			return BFType::makeEnum(e->name);
+		if (resolver_.isKnownStruct(e->name))
+			return BFType::makeStruct(e->name);
+		// Unqualified enum variant (e.g. SPADES in struct initializers).
+		const std::string* variantEnum = resolver_.enumForVariant(e->name);
+		if (variantEnum)
+			return BFType::makeEnum(*variantEnum);
+		const auto* sym = scopes_.lookup(e->name);
+		if (!sym) {
+			// Suppress error for names brought in via import — the cross-module
+			// linker resolves them; we just return Unknown to avoid cascading.
+			if (importedNames_.count(e->name))
+				return BFType::makeUnknown();
+			diag_.error(loc(e->line, e->column),
+			            "undefined variable '" + e->name + "'");
+			return BFType::makeUnknown();
+		}
+		return sym->type;
+	}
+
+	if (auto* e = dynamic_cast<const BinaryExpr*>(&expr))
+		return analyzeBinary(*e);
+	if (auto* e = dynamic_cast<const UnaryExpr*>(&expr))
+		return analyzeUnary(*e);
+	if (auto* e = dynamic_cast<const CallExpr*>(&expr))
+		return analyzeCall(*e);
+	if (auto* e = dynamic_cast<const MemberAccessExpr*>(&expr))
+		return analyzeMemberAccess(*e);
+	if (auto* e = dynamic_cast<const IndexExpr*>(&expr))
+		return analyzeIndex(*e);
+
+	if (auto* e = dynamic_cast<const ArrayLiteralExpr*>(&expr)) {
+		BFType elemType = BFType::makeUnknown();
+		for (const auto& elem : e->elements)
+			elemType = analyzeExpression(*elem);
+		return BFType::makeArray(elemType);
+	}
+
+	if (auto* e = dynamic_cast<const StructInitExpr*>(&expr)) {
+		for (const auto& [_, fieldExpr] : e->fields)
+			analyzeExpression(*fieldExpr);
+		return BFType::makeUnknown();  // type determined by assignment context
+	}
+
+	if (auto* e = dynamic_cast<const AssignExpr*>(&expr)) {
+		analyzeExpression(*e->target);
+		analyzeExpression(*e->value);
+		return BFType::makeUnknown();
+	}
+
+	return BFType::makeUnknown();
+}
+
+// -----------------------------------------------------------------------
+// Expression sub-analysers
+// -----------------------------------------------------------------------
+
+BFType SemanticContext::analyzeBinary(const BinaryExpr& expr) {
+	BFType lhs = analyzeExpression(*expr.left);
+	BFType rhs = analyzeExpression(*expr.right);
+	if (!checker_.isBinaryOpValid(expr.op, lhs, rhs)) {
+		diag_.error(loc(expr.line, expr.column),
+		            "operator '" + expr.op + "' cannot be applied to '" +
+		                lhs.toString() + "' and '" + rhs.toString() + "'");
+		return BFType::makeUnknown();
+	}
+	return checker_.inferBinaryResult(expr.op, lhs, rhs);
+}
+
+BFType SemanticContext::analyzeUnary(const UnaryExpr& expr) {
+	BFType operand = analyzeExpression(*expr.operand);
+	if (!checker_.isUnaryOpValid(expr.op, operand)) {
+		diag_.error(loc(expr.line, expr.column),
+		            "operator '" + expr.op + "' cannot be applied to '" +
+		                operand.toString() + "'");
+		return BFType::makeUnknown();
+	}
+	return checker_.inferUnaryResult(expr.op, operand);
+}
+
+BFType SemanticContext::analyzeCall(const CallExpr& expr) {
+	// Analyse all arguments regardless of whether the callee resolves.
+	for (const auto& arg : expr.arguments)
+		analyzeExpression(*arg);
+
+	// Simple identifier callee: look up return type if known.
+	if (auto* id = dynamic_cast<const IdentifierExpr*>(expr.callee.get())) {
+		// Builtin functions: print, input, srand, rand.
+		if (id->name == "print" || id->name == "srand")
+			return BFType::makeVoid();
+		if (id->name == "input")
+			return BFType::makeString();
+		if (id->name == "rand")
+			return BFType::makeInt();
+		// Stdlib math functions return float.
+		if (stdlibMathNames().count(id->name))
+			return BFType::makeFloat();
+		// Struct constructor call: Deck()
+		if (resolver_.isKnownStruct(id->name) &&
+		    !importedNames_.count(id->name))
+			return BFType::makeStruct(id->name);
+		// Enum type used as a function — not valid, but don't crash here.
+		if (resolver_.isKnownEnum(id->name))
+			return BFType::makeUnknown();
+		// Look up in scope (user-defined functions are declared in global scope).
+		const auto* sym = scopes_.lookup(id->name);
+		return sym ? sym->type : BFType::makeUnknown();
+	}
+
+	// Member call (method invocation or namespace call) — return unknown;
+	// method return types are tracked per-struct (not yet in Phase 1 scope).
+	if (auto* ma = dynamic_cast<const MemberAccessExpr*>(expr.callee.get())) {
+		analyzeExpression(*ma->object);
+	}
+
+	return BFType::makeUnknown();
+}
+
+BFType SemanticContext::analyzeMemberAccess(const MemberAccessExpr& expr) {
+	BFType obj = analyzeExpression(*expr.object);
+
+	// Enum variant access: CardRanks.ACE
+	if (obj.isEnum())
+		return BFType::makeEnum(obj.name);
+
+	// Struct field access: the struct type table isn't mirrored in the semantic
+	// layer yet (that is Phase 2 / HIR work).  Return unknown conservatively.
+	if (obj.isStruct())
+		return BFType::makeUnknown();
+
+	// Array built-in members: arr.length() → int (caller wraps in CallExpr)
+	if (obj.isArray())
+		return BFType::makeUnknown();
+
+	return BFType::makeUnknown();
+}
+
+BFType SemanticContext::analyzeIndex(const IndexExpr& expr) {
+	BFType obj = analyzeExpression(*expr.object);
+	analyzeExpression(*expr.index);
+
+	if (obj.isArray() && obj.elemType)
+		return *obj.elemType;
+
+	if (obj.isMap() && obj.valueType)
+		return *obj.valueType;
+
+	return BFType::makeUnknown();
+}
+
+// -----------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------
+
+SourceLocation SemanticContext::loc(int line, int col) const {
+	return {sourceFile_, line, col};
+}
+
+}  // namespace bytefrost

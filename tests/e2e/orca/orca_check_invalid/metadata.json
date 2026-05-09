@@ -1,0 +1,7 @@
+{
+  "id": "orca_check_invalid",
+  "target": "orca",
+  "kind": "orca-check-fail",
+  "description": "orca check should fail for invalid source",
+  "timeoutSeconds": 30
+}

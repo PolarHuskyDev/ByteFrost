@@ -1,0 +1,7 @@
+{
+  "id": "enum_int_assign",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Reject integer assignment to enum",
+  "timeoutSeconds": 10
+}

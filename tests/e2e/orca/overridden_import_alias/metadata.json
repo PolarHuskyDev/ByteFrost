@@ -1,0 +1,7 @@
+{
+  "id": "overridden_import_alias",
+  "target": "orca",
+  "kind": "orca-positive",
+  "description": "Aliased import resolves without stdlib conflict",
+  "timeoutSeconds": 30
+}

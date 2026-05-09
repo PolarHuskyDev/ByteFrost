@@ -20,6 +20,7 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Target/TargetMachine.h"
 #include "parser/ast.h"
+#include "bytefrost/hir/hir.h"
 
 class CodeGenError : public std::runtime_error {
    public:
@@ -129,48 +130,49 @@ class CodeGen {
 	// Shared IR building (used by generate() and emitObjectFile()).
 	void buildIR(const Program& program);
 
-	// Core generation.
-	void generateFunction(const FunctionDecl& fn);
-	void generateStatement(const Statement& stmt);
-	llvm::Value* generateExpression(const Expression& expr);
+	// Core generation — all lowering methods now consume the typed HIR.
+	void generateFunction(const bytefrost::HIRFunction& fn);
+	void generateStatement(const bytefrost::HIRStmt& stmt);
+	llvm::Value* generateExpression(const bytefrost::HIRExpr& expr);
 	llvm::Type* getLLVMType(const TypeNode& type);
+	llvm::Type* getLLVMType(const bytefrost::BFType& type);
 
 	// Statements.
-	void generateVarDecl(const VarDeclStmt& stmt);
-	void generateAssign(const AssignStmt& stmt);
-	void generateIf(const IfStmt& stmt);
-	void generateWhile(const WhileStmt& stmt);
-	void generateFor(const ForStmt& stmt);
-	void generateForIn(const ForInStmt& stmt);
-	void generateMatch(const MatchStmt& stmt);
-	void generateReturn(const ReturnStmt& stmt);
-	void generateExprStmt(const ExprStmt& stmt);
+	void generateVarDecl(const bytefrost::HIRVarDecl& stmt);
+	void generateAssign(const bytefrost::HIRAssign& stmt);
+	void generateIf(const bytefrost::HIRIf& stmt);
+	void generateWhile(const bytefrost::HIRWhile& stmt);
+	void generateFor(const bytefrost::HIRFor& stmt);
+	void generateForIn(const bytefrost::HIRForIn& stmt);
+	void generateMatch(const bytefrost::HIRMatch& stmt);
+	void generateReturn(const bytefrost::HIRReturn& stmt);
+	void generateExprStmt(const bytefrost::HIRExprStmt& stmt);
 
 	// Expressions.
-	llvm::Value* generateBinary(const BinaryExpr& expr);
-	llvm::Value* generateUnary(const UnaryExpr& expr);
-	llvm::Value* generateCall(const CallExpr& expr);
-	llvm::Value* generateIdentifier(const IdentifierExpr& expr);
-	llvm::Value* generateIndex(const IndexExpr& expr);
-	llvm::Value* generateMemberAccess(const MemberAccessExpr& expr);
-	llvm::Value* generateInterpolatedString(const InterpolatedStringExpr& expr);
+	llvm::Value* generateBinary(const bytefrost::HIRBinaryExpr& expr);
+	llvm::Value* generateUnary(const bytefrost::HIRUnaryExpr& expr);
+	llvm::Value* generateCall(const bytefrost::HIRCallExpr& expr);
+	llvm::Value* generateIdentifier(const bytefrost::HIRVar& expr);
+	llvm::Value* generateIndex(const bytefrost::HIRIndexExpr& expr);
+	llvm::Value* generateMemberAccess(const bytefrost::HIRMemberAccess& expr);
+	llvm::Value* generateInterpolatedString(const bytefrost::HIRInterpolatedString& expr);
 
 	// Struct support.
-	void registerStructTypes(const Program& program);
-	void generateStructMethods(const Program& program);
-	void generateStructInit(const StructInitExpr& expr, llvm::Value* basePtr, const std::string& structName);
-	std::pair<llvm::Value*, std::string> resolveStructBase(const Expression& expr);
+	void registerStructTypes(const bytefrost::HIRProgram& hir);
+	void generateStructMethods(const bytefrost::HIRProgram& hir);
+	void generateStructInit(const bytefrost::HIRStructInit& expr, llvm::Value* basePtr, const std::string& structName);
+	std::pair<llvm::Value*, std::string> resolveStructBase(const bytefrost::HIRExpr& expr);
 
 	// Enum support.
-	void registerEnumTypes(const Program& program);
-	/// Get the ByteFrost type name (e.g. "CardRanks") for a given expression, or "" if unknown.
-	std::string getExprBFType(const Expression& expr);
+	void registerEnumTypes(const bytefrost::HIRProgram& hir);
+	/// Get the ByteFrost type name string for a HIR expression (for scope tracking).
+	std::string bfTypeToString(const bytefrost::BFType& t) const;
 	/// Given an i32 enum value, return an i8* pointing to the variant's name string.
 	llvm::Value* generateEnumToString(llvm::Value* enumVal, const std::string& enumTypeName);
 
 	// Array support.
 	llvm::StructType* getOrCreateArrayType(llvm::Type* elemType);
-	llvm::Value* generateArrayLiteral(const ArrayLiteralExpr& expr, llvm::Type* elemType);
+	llvm::Value* generateArrayLiteral(const bytefrost::HIRArrayLit& expr, llvm::Type* elemType);
 	llvm::Value* generateEmptyArray(llvm::Type* elemType);
 void generateArrayPush(llvm::Value* arrPtr, llvm::Type* elemType, llvm::Value* value);
 
@@ -183,15 +185,15 @@ void generateArrayPush(llvm::Value* arrPtr, llvm::Type* elemType, llvm::Value* v
 	generateMapGet(llvm::AllocaInst* mapAlloca, llvm::Type* keyType, llvm::Type* valType, llvm::Value* key);
 
 	// Built-in print handling.
-	llvm::Value* generatePrintCall(const std::vector<ExprPtr>& args);
+	llvm::Value* generatePrintCall(const std::vector<bytefrost::HIRExprPtr>& args);
 
 	// Built-in input handling.
 	/// Generate an input() call that reads from stdin.
 	/// targetTypeName: the BF type name the result is being stored into ("int", "float", "bool", "string", "").
-	llvm::Value* generateInputCall(const std::vector<ExprPtr>& args, const std::string& targetTypeName);
+	llvm::Value* generateInputCall(const std::vector<bytefrost::HIRExprPtr>& args, const std::string& targetTypeName);
 
 	// Math stdlib dispatch.
-	llvm::Value* generateMathCall(const std::string& name, const std::vector<ExprPtr>& args);
+	llvm::Value* generateMathCall(const std::string& name, const std::vector<bytefrost::HIRExprPtr>& args);
 
 	// The set of stdlib math function names (populated once, used everywhere).
 	static const std::set<std::string>& stdlibMathNames();
@@ -214,8 +216,8 @@ void generateArrayPush(llvm::Value* arrPtr, llvm::Type* elemType, llvm::Value* v
 						 llvm::Type* type,
 						 const std::string& bfTypeName = "");
 
-	/// Get a store-able pointer for an lvalue expression (for assignment).
-	llvm::Value* generateLValue(const Expression& expr);
+	/// Get a store-able pointer for an lvalue HIR expression (for assignment).
+	llvm::Value* generateLValue(const bytefrost::HIRExpr& expr);
 
 	/// Check if an LLVM type is a string type (i8*).
 	bool isStringType(llvm::Type* type) const;

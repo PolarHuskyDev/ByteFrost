@@ -1,0 +1,7 @@
+{
+  "id": "blackjack",
+  "target": "orca",
+  "kind": "orca-smoke",
+  "description": "Interactive non-deterministic blackjack game",
+  "timeoutSeconds": 45
+}

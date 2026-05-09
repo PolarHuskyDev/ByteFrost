@@ -1,0 +1,7 @@
+{
+  "id": "orca_run_module_example",
+  "target": "orca",
+  "kind": "orca-run",
+  "description": "orca run executes module example",
+  "timeoutSeconds": 30
+}

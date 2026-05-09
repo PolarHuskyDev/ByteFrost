@@ -1,0 +1,7 @@
+{
+  "id": "interpolation_member_access",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Interpolated string with chained member access",
+  "timeoutSeconds": 10
+}

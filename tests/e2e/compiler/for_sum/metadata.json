@@ -1,0 +1,7 @@
+{
+  "id": "for_sum",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "For loop accumulation",
+  "timeoutSeconds": 10
+}

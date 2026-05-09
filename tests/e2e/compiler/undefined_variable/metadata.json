@@ -1,0 +1,7 @@
+{
+  "id": "undefined_variable",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Undefined variable usage must fail",
+  "timeoutSeconds": 10
+}
