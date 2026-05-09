@@ -62,16 +62,6 @@ else
     NC=''
 fi
 
-PYTHON_BIN=""
-if command -v python3 >/dev/null 2>&1; then
-    PYTHON_BIN="python3"
-elif command -v python >/dev/null 2>&1; then
-    PYTHON_BIN="python"
-else
-    echo -e "${RED}FAIL${NC} missing python (required to parse metadata.json)"
-    exit 1
-fi
-
 get_time_ns() {
     date +%s%N
 }
@@ -90,17 +80,7 @@ format_duration() {
 
 parse_json() {
     local file="$1"
-    "$PYTHON_BIN" - "$file" <<'PY'
-import json, sys
-with open(sys.argv[1], 'r', encoding='utf-8') as f:
-    data = json.load(f)
-id_val = data.get('id', '')
-target_val = data.get('target', '')
-kind_val = data.get('kind', '')
-description_val = data.get('description', '')
-timeout_val = data.get('timeoutSeconds', '10')
-print(f"{id_val}|{target_val}|{kind_val}|{description_val}|{timeout_val}")
-PY
+    jq -r '[.id,.target,.kind,.description,.timeoutSeconds//10] | join("|")' "$file"
 }
 
 normalize_output() {
@@ -506,6 +486,11 @@ run_orca_smoke() {
 echo "Compiler: $COMPILER"
 echo "E2E Root: $E2E_DIR"
 echo ""
+
+if ! command -v jq >/dev/null 2>&1; then
+    echo -e "${RED}FAIL${NC} jq not found (required to parse metadata.json)"
+    exit 1
+fi
 
 if [ ! -x "$COMPILER" ]; then
     echo -e "${RED}FAIL${NC} compiler executable not found or not executable: $COMPILER"
