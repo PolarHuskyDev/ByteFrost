@@ -82,6 +82,10 @@ const char* tokenTypeToString(TokenType type) {
 			return "OVERRIDDEN";
 		case TokenType::ENUM_TOKEN:
 			return "ENUM";
+		case TokenType::CONST_TOKEN:
+			return "CONST";
+		case TokenType::READONLY_TOKEN:
+			return "READONLY";
 		case TokenType::PLUS_TOKEN:
 			return "PLUS";
 		case TokenType::MINUS_TOKEN:
@@ -168,6 +172,10 @@ const char* tokenTypeToString(TokenType type) {
 			return "UNDERSCORE";
 		case TokenType::DOTDOT_TOKEN:
 			return "DOTDOT";
+		case TokenType::QUESTION_TOKEN:
+			return "QUESTION";
+		case TokenType::QUESTION_DOT_TOKEN:
+			return "QUESTION_DOT";
 		default:
 			return "UNKNOWN";
 	}

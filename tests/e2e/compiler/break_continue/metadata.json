@@ -1,0 +1,7 @@
+{
+  "id": "break_continue",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Break and continue control flow",
+  "timeoutSeconds": 10
+}

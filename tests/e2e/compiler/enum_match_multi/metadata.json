@@ -1,0 +1,7 @@
+{
+  "id": "enum_match_multi",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Enum match with multi-pattern branch",
+  "timeoutSeconds": 10
+}

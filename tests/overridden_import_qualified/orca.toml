@@ -1,4 +1,0 @@
-[project]
-name    = "overridden_import_qualified"
-version = "0.1.0"
-entry   = "src/main.bf"

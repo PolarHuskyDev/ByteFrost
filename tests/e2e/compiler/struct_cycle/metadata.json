@@ -1,0 +1,7 @@
+{
+  "id": "struct_cycle",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Cyclic struct dependency must fail",
+  "timeoutSeconds": 10
+}

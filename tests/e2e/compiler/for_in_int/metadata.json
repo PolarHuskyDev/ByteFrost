@@ -1,0 +1,7 @@
+{
+  "id": "for_in_int",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "For-in loop iterating over integer array",
+  "timeoutSeconds": 10
+}

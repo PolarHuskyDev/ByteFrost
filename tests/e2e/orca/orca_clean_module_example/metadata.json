@@ -1,0 +1,7 @@
+{
+  "id": "orca_clean_module_example",
+  "target": "orca",
+  "kind": "orca-clean",
+  "description": "orca clean removes build/orca artifacts",
+  "timeoutSeconds": 30
+}

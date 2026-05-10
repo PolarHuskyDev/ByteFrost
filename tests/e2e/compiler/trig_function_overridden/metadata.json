@@ -1,0 +1,7 @@
+{
+  "id": "trig_function_overridden",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Stdlib override via overridden keyword",
+  "timeoutSeconds": 10
+}

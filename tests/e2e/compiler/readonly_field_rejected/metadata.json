@@ -1,0 +1,7 @@
+{
+  "id": "readonly_field_rejected",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Readonly field assignment outside constructor must fail",
+  "timeoutSeconds": 10
+}

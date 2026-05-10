@@ -1,0 +1,5 @@
+NORTH
+SOUTH
+Heading north
+EAST
+WEST

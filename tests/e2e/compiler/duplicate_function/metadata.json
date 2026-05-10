@@ -1,0 +1,7 @@
+{
+  "id": "duplicate_function",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Duplicate function declaration must fail",
+  "timeoutSeconds": 10
+}

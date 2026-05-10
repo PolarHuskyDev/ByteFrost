@@ -1,0 +1,7 @@
+{
+  "id": "map_string_keys",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Map with string keys",
+  "timeoutSeconds": 10
+}

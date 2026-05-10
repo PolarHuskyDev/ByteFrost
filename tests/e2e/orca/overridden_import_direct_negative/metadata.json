@@ -1,0 +1,7 @@
+{
+  "id": "overridden_import_direct_negative",
+  "target": "orca",
+  "kind": "orca-negative",
+  "description": "Direct conflicting import should be rejected",
+  "timeoutSeconds": 30
+}

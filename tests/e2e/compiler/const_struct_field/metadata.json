@@ -1,0 +1,7 @@
+{
+  "id": "const_struct_field",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Struct with const field readable after struct literal init",
+  "timeoutSeconds": 10
+}

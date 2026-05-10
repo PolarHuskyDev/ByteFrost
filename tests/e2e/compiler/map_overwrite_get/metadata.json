@@ -1,0 +1,7 @@
+{
+  "id": "map_overwrite_get",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Map overwrite then get",
+  "timeoutSeconds": 10
+}

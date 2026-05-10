@@ -175,6 +175,13 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl() {
 	if (!check(TokenType::RIGHT_PAREN_TOKEN)) {
 		do {
 			Parameter param;
+			param.isReadonly = false;
+			
+			// Phase 3: Check for readonly modifier
+			if (match(TokenType::READONLY_TOKEN)) {
+				param.isReadonly = true;
+			}
+			
 			const Token& pname = expect(TokenType::IDENTIFIER_TOKEN, "Expected parameter name");
 			param.name = pname.value;
 			expect(TokenType::COLON_TOKEN, "Expected ':' after parameter name");
@@ -221,13 +228,33 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl() {
 			m.method = parseFunctionDecl();
 			sd->members.push_back(std::move(m));
 		} else {
-			// Field: identifier ":" type ";"
+			// Field: [readonly] [const] identifier ":" type ";"
+			// Phase 3: Support readonly and const modifiers
 			StructMember m;
 			m.kind = StructMember::FIELD;
+			m.isReadonly = false;
+			m.isConstant = false;
+			
+			// Check for readonly modifier
+			if (match(TokenType::READONLY_TOKEN)) {
+				m.isReadonly = true;
+			}
+			
+			// Check for const modifier
+			if (match(TokenType::CONST_TOKEN)) {
+				m.isConstant = true;
+			}
+			
 			const Token& fname = expect(TokenType::IDENTIFIER_TOKEN, "Expected field name");
 			m.fieldName = fname.value;
 			expect(TokenType::COLON_TOKEN, "Expected ':' after field name");
 			m.fieldType = parseType();
+			
+			// Validate: const fields cannot be nullable
+			if (m.isConstant && m.fieldType && m.fieldType->isNullable) {
+				error("const field cannot have nullable type");
+			}
+			
 			expect(TokenType::SEMICOLON_TOKEN, "Expected ';' after field declaration");
 			sd->members.push_back(std::move(m));
 		}
@@ -301,6 +328,11 @@ std::unique_ptr<TypeNode> Parser::parseType() {
 		error("Expected type");
 	}
 
+	// Phase 3: Check for nullable type marker (T?)
+	if (match(TokenType::QUESTION_TOKEN)) {
+		typeNode->isNullable = true;
+	}
+
 	return typeNode;
 }
 
@@ -357,6 +389,12 @@ StmtPtr Parser::parseStatement() {
 //   identifier ":=" expression ";"
 // Otherwise it's an expression (possibly with assignment) followed by ";"
 StmtPtr Parser::parseVarDeclOrExprStmt() {
+	// Phase 3: Check for const keyword first
+	bool isConstant = false;
+	if (match(TokenType::CONST_TOKEN)) {
+		isConstant = true;
+	}
+
 	// Check for variable declaration: identifier ":" or identifier ":="
 	if (check(TokenType::IDENTIFIER_TOKEN)) {
 		// Look ahead for ":" or ":="
@@ -365,17 +403,33 @@ StmtPtr Parser::parseVarDeclOrExprStmt() {
 			decl->line = current().line;
 			decl->column = current().column;
 			decl->name = current().value;
+			decl->isConstant = isConstant;
 			advance();	// consume identifier
 
 			if (match(TokenType::WALRUS_TOKEN)) {
-				// x := expr;
+				// x := expr; or const x := expr; (not valid syntax but catches error)
+				if (isConstant) {
+					error("const declaration must have explicit type: const X: Type = value;");
+				}
 				decl->isWalrus = true;
 				decl->initializer = parseExpression();
 			} else {
-				// x: type [= expr];
+				// x: type [= expr]; or const x: type = expr;
 				expect(TokenType::COLON_TOKEN, "Expected ':'");
 				decl->type = parseType();
-				if (match(TokenType::ASSIGN_TOKEN)) {
+				
+				// Phase 3: Validate that const types are not nullable
+				if (isConstant && decl->type && decl->type->isNullable) {
+					error("const declarations cannot have nullable type");
+				}
+				
+				if (isConstant) {
+					// Phase 3: deferred const init is allowed (const X: int;)
+					if (match(TokenType::ASSIGN_TOKEN)) {
+						decl->initializer = parseExpression();
+					}
+				} else if (match(TokenType::ASSIGN_TOKEN)) {
+					// Optional initializer for regular variables
 					decl->initializer = parseExpression();
 				}
 			}
@@ -383,6 +437,11 @@ StmtPtr Parser::parseVarDeclOrExprStmt() {
 			expect(TokenType::SEMICOLON_TOKEN, "Expected ';' after variable declaration");
 			return decl;
 		}
+	}
+
+	// If we saw const but no variable declaration, that's an error
+	if (isConstant) {
+		error("const must be followed by variable declaration");
 	}
 
 	// Expression statement (which may include assignment like x = 5; or x += 1; or x++; or fn();)
@@ -461,40 +520,40 @@ StmtPtr Parser::parseForStmt() {
 	expect(TokenType::FOR_TOKEN, "Expected 'for'");
 	expect(TokenType::LEFT_PAREN_TOKEN, "Expected '(' after 'for'");
 
-	// Check for for-in: identifier ":" type "in" "[" expr ".." expr "]"
-	// Lookahead: IDENTIFIER COLON TYPE IN
+	// Phase 3: Check for for-in: identifier [":" type] "in" expr
+	// Lookahead: IDENTIFIER [COLON TYPE] IN
 	if (check(TokenType::IDENTIFIER_TOKEN)) {
 		size_t saved = pos;
 		std::string varName = current().value;
 		advance();
+		
+		std::unique_ptr<TypeNode> varType = nullptr;
+		
+		// Optional type annotation
 		if (check(TokenType::COLON_TOKEN)) {
 			advance();
-			// Try to parse type, then check for "in"
-			auto varType = parseType();
-			if (check(TokenType::IN_TOKEN)) {
-				advance();
-				expect(TokenType::LEFT_BRACKET_TOKEN, "Expected '[' after 'in'");
-				auto rangeStart = parseExpression();
-				expect(TokenType::DOTDOT_TOKEN, "Expected '..' in range");
-				auto rangeEnd = parseExpression();
-				expect(TokenType::RIGHT_BRACKET_TOKEN, "Expected ']' after range");
-				expect(TokenType::RIGHT_PAREN_TOKEN, "Expected ')' after for-in header");
-
-				auto stmt = std::make_unique<ForInStmt>();
-				stmt->line = startLine;
-				stmt->column = startCol;
-				stmt->varName = varName;
-				stmt->varType = std::move(varType);
-				stmt->rangeStart = std::move(rangeStart);
-				stmt->rangeEnd = std::move(rangeEnd);
-				stmt->body = parseBlock();
-				return stmt;
-			}
-			// Not a for-in, backtrack
-			pos = saved;
-		} else {
-			pos = saved;
+			varType = parseType();
 		}
+		
+		// Check for "in" keyword
+		if (check(TokenType::IN_TOKEN)) {
+			advance();
+			// Parse any expression as the range (array, variable, function call, etc.)
+			auto rangeExpr = parseExpression();
+			expect(TokenType::RIGHT_PAREN_TOKEN, "Expected ')' after for-in");
+
+			auto stmt = std::make_unique<ForInStmt>();
+			stmt->line = startLine;
+			stmt->column = startCol;
+			stmt->varName = varName;
+			stmt->varType = std::move(varType);
+			stmt->range = std::move(rangeExpr);  // Phase 3: Single range field
+			stmt->body = parseBlock();
+			return stmt;
+		}
+		
+		// Not a for-in, backtrack
+		pos = saved;
 	}
 
 	// C-style for loop: for (init; cond; update) { ... }
@@ -543,6 +602,10 @@ std::unique_ptr<MatchStmt> Parser::parseMatchStmt() {
 		if (check(TokenType::UNDERSCORE_TOKEN)) {
 			// Default case
 			mc.isDefault = true;
+			advance();
+		} else if (check(TokenType::NULL_TOKEN)) {
+			// Phase 3: null pattern
+			mc.isNullPattern = true;
 			advance();
 		} else {
 			// Pattern: expr { "|" expr }
@@ -737,6 +800,19 @@ ExprPtr Parser::parsePostfix() {
 			auto index = parseExpression();
 			expect(TokenType::RIGHT_BRACKET_TOKEN, "Expected ']' after index");
 			expr = std::make_unique<IndexExpr>(std::move(expr), std::move(index));
+		} else if (check(TokenType::QUESTION_DOT_TOKEN)
+				   || (check(TokenType::QUESTION_TOKEN) && peek().type == TokenType::DOT_TOKEN)) {
+			// Phase 3: Null-safe access: obj?.field : fallback or obj? .field : fallback
+			if (match(TokenType::QUESTION_TOKEN)) {
+				expect(TokenType::DOT_TOKEN, "Expected '.' after '?' in null-safe access");
+			} else {
+				advance();
+			}
+
+			const Token& member = expect(TokenType::IDENTIFIER_TOKEN, "Expected member name after '?.'");
+			expect(TokenType::COLON_TOKEN, "Expected ':' and fallback after null-safe access member");
+			auto fallback = parseExpression();
+			expr = std::make_unique<NullSafeAccessExpr>(std::move(expr), member.value, std::move(fallback));
 		} else if (check(TokenType::DOT_TOKEN)) {
 			// Member access
 			advance();

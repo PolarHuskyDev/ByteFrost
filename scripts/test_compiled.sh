@@ -1,24 +1,34 @@
 #!/usr/bin/env bash
 #
-# test_compiled.sh — End-to-end test for ByteFrost compiled programs.
+# Data-driven e2e test runner for ByteFrost compiler and Orca tooling.
 #
-# For each .bf test file, this script:
-#   1. Compiles the .bf source directly to an executable using byte_frost
-#   2. Runs the executable and captures stdout
-#   3. Compares stdout against the expected output
+# Discovers all metadata.json files under tests/e2e/** and executes each case
+# according to its kind and target.
+#
+# Test structure:
+#   tests/e2e/compiler/<test_id>/
+#     metadata.json
+#     src/main.bf (required)
+#     stdout.txt (optional - validates stdout)
+#     stderr.txt (optional - validates stderr)
+#     stdin.txt (optional - provides stdin)
+#
+#   tests/e2e/orca/<test_id>/
+#     metadata.json
+#     orca.toml (required)
+#     src/ (project sources)
+#     stdout.txt (optional)
+#     stderr.txt (optional)
+#     stdin.txt (optional)
 #
 # Usage:
 #   ./scripts/test_compiled.sh [-v|--verbose] [path/to/byte_frost]
-#
-# Options:
-#   -v, --verbose   Show the stdout output of each test executable.
-#
-# If no path is given, defaults to build/Release/byte_frost.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+E2E_DIR="$PROJECT_DIR/tests/e2e"
 VERBOSE=false
 COMPILER=""
 
@@ -30,17 +40,16 @@ for arg in "$@"; do
 done
 
 COMPILER="${COMPILER:-$PROJECT_DIR/build/Release/byte_frost}"
-TESTS_DIR="$PROJECT_DIR/tests"
+ORCA_BIN="$(dirname "$COMPILER")/orca"
 TMP_DIR=$(mktemp -d)
-
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 PASS=0
 FAIL=0
 SKIP=0
 TOTAL=0
+TOTAL_ELAPSED=0
 
-# Colors (only if stdout is a terminal).
 if [ -t 1 ]; then
     GREEN='\033[0;32m'
     RED='\033[0;31m'
@@ -53,536 +62,457 @@ else
     NC=''
 fi
 
-# ---------------------------------------------------------------------------
-# run_test NAME BF_FILE EXPECTED_OUTPUT [TIMEOUT]
-#   Compile a .bf file and verify its stdout matches EXPECTED_OUTPUT.
-# ---------------------------------------------------------------------------
+get_time_ns() {
+    date +%s%N
+}
+
+format_duration() {
+    local ns=$1
+    local ms=$((ns / 1000000))
+    if [ $ms -lt 1000 ]; then
+        echo "${ms}ms"
+    else
+        local seconds=$((ms / 1000))
+        local remainder=$((ms % 1000))
+        echo "${seconds}.$(printf '%03d' $remainder)s"
+    fi
+}
+
+parse_json() {
+    local file="$1"
+    jq -r '[.id,.target,.kind,.description,.timeoutSeconds//10] | join("|")' "$file"
+}
+
+normalize_output() {
+    tr -d '\r'
+}
+
+read_optional_file() {
+    local path="$1"
+    if [ ! -f "$path" ]; then
+        echo ""
+        return
+    fi
+    cat "$path"
+}
+
 run_test() {
-    local name="$1"
-    local bf_file="$2"
-    local expected="$3"
-    local timeout_secs="${4:-10}"
-
-    TOTAL=$((TOTAL + 1))
-
-    # Step 1: Compile .bf -> executable directly
-    local exe_file="$TMP_DIR/${name}"
-    if ! "$COMPILER" "$bf_file" -o "$exe_file" 2>"$TMP_DIR/${name}.compile_err"; then
-        echo -e "  ${RED}FAIL${NC} $name — compilation failed"
-        cat "$TMP_DIR/${name}.compile_err" | sed 's/^/    /'
-        FAIL=$((FAIL + 1))
-        return
-    fi
-
-    # Step 2: Run the executable with a timeout.
-    local actual
-    if ! actual=$(timeout "$timeout_secs" "$exe_file" 2>"$TMP_DIR/${name}.run_err"); then
-        local exit_code=$?
-        if [ $exit_code -eq 124 ]; then
-            echo -e "  ${RED}FAIL${NC} $name — timed out after ${timeout_secs}s"
-        else
-            echo -e "  ${RED}FAIL${NC} $name — runtime error (exit code $exit_code)"
-            cat "$TMP_DIR/${name}.run_err" | sed 's/^/    /'
-        fi
-        FAIL=$((FAIL + 1))
-        return
-    fi
-
-    # Strip Windows CR so CRLF output compares cleanly against LF expected strings.
-    actual=$(printf '%s' "$actual" | tr -d '\r')
-
-    # Show output if verbose.
-    if [ "$VERBOSE" = true ]; then
-        echo -e "  --- $name output ---"
-        echo "$actual" | sed 's/^/    /'
-        echo -e "  ---"
-    fi
-
-    # Step 4: Compare output.
-    if [ "$actual" = "$expected" ]; then
-        echo -e "  ${GREEN}PASS${NC} $name"
-        PASS=$((PASS + 1))
+    local case_dir="$1" metadata_file="$2"
+    local id kind description target timeout
+    local test_start test_end elapsed_ns
+    local json_fields
+    
+    # Parse JSON once and extract all fields in a single Python call
+    json_fields="$(parse_json "$metadata_file")"
+    IFS='|' read -r id target kind description timeout <<< "$json_fields"
+    
+    if [ -n "$description" ]; then
+        echo "[$kind] $id - $description"
     else
-        echo -e "  ${RED}FAIL${NC} $name — output mismatch"
-        echo "    Expected:"
-        echo "$expected" | sed 's/^/      /'
-        echo "    Actual:"
-        echo "$actual" | sed 's/^/      /'
-        FAIL=$((FAIL + 1))
+        echo "[$kind] $id"
     fi
+    
+    test_start=$(get_time_ns)
+    
+    case "$target" in
+        compiler) run_compiler_test "$case_dir" "$id" "$kind" "$timeout" ;;
+        orca) run_orca_test "$case_dir" "$id" "$kind" "$timeout" ;;
+        *)
+            echo -e "  ${YELLOW}SKIP${NC} unknown target '$target'"
+            SKIP=$((SKIP + 1))
+            test_end=$(get_time_ns)
+            elapsed_ns=$((test_end - test_start))
+            TOTAL_ELAPSED=$((TOTAL_ELAPSED + elapsed_ns))
+            return
+            ;;
+    esac
+    
+    test_end=$(get_time_ns)
+    elapsed_ns=$((test_end - test_start))
+    TOTAL_ELAPSED=$((TOTAL_ELAPSED + elapsed_ns))
+    printf "    (%.0fms)\n" $((elapsed_ns / 1000000))
 }
 
-skip_test() {
-    local name="$1"
-    local reason="$2"
-    TOTAL=$((TOTAL + 1))
-    SKIP=$((SKIP + 1))
-    echo -e "  ${YELLOW}SKIP${NC} $name — $reason"
-}
-
-# ---------------------------------------------------------------------------
-# run_negative_test NAME BF_FILE [EXPECTED_ERR_SUBSTRING]
-#   Compile a .bf file and verify the compiler REJECTS it (non-zero exit).
-#   Optionally, check that stderr contains EXPECTED_ERR_SUBSTRING.
-# ---------------------------------------------------------------------------
-run_negative_test() {
-    local name="$1"
-    local bf_file="$2"
-    local expected_err="${3:-}"
-
-    TOTAL=$((TOTAL + 1))
-
-    local exe_file="$TMP_DIR/${name}"
-    if "$COMPILER" "$bf_file" -o "$exe_file" 2>"$TMP_DIR/${name}.compile_err"; then
-        echo -e "  ${RED}FAIL${NC} $name — expected compilation failure but it succeeded"
+run_compiler_test() {
+    local case_dir="$1" id="$2" kind="$3" timeout="$4"
+    local src_file="$case_dir/src/main.bf"
+    local expected_stdout="$case_dir/stdout.txt"
+    local expected_stderr="$case_dir/stderr.txt"
+    local stdin_file="$case_dir/stdin.txt"
+    local exe_file="$TMP_DIR/${id}.exe"
+    
+    # Verify src/main.bf exists
+    if [ ! -f "$src_file" ]; then
+        echo -e "  ${RED}FAIL${NC} src/main.bf not found"
         FAIL=$((FAIL + 1))
         return
     fi
-
-    if [ -n "$expected_err" ]; then
-        if grep -qF "$expected_err" "$TMP_DIR/${name}.compile_err"; then
-            echo -e "  ${GREEN}PASS${NC} $name (correctly rejected with expected error)"
-            PASS=$((PASS + 1))
-        else
-            echo -e "  ${RED}FAIL${NC} $name — compiler rejected but error message didn't match"
-            echo "    Expected stderr to contain: $expected_err"
-            echo "    Actual stderr:"
-            cat "$TMP_DIR/${name}.compile_err" | sed 's/^/      /'
-            FAIL=$((FAIL + 1))
-        fi
-    else
-        echo -e "  ${GREEN}PASS${NC} $name (correctly rejected)"
-        PASS=$((PASS + 1))
-    fi
-}
-
-# ---------------------------------------------------------------------------
-# run_orca_test NAME TOML_PATH EXPECTED_OUTPUT [TIMEOUT]
-#   Build an orca project and verify its stdout matches EXPECTED_OUTPUT.
-# ---------------------------------------------------------------------------
-run_orca_test() {
-    local name="$1"
-    local toml_path="$2"
-    local expected="$3"
-    local timeout_secs="${4:-30}"
-
-    TOTAL=$((TOTAL + 1))
-
-    local exe_file="$TMP_DIR/${name}"
-    local orca_bin
-    orca_bin="$(dirname "$COMPILER")/orca"
-
-    if ! "$orca_bin" --project "$toml_path" -o "$exe_file" \
-            2>"$TMP_DIR/${name}.compile_err" 1>"$TMP_DIR/${name}.orca_out"; then
-        echo -e "  ${RED}FAIL${NC} $name — orca build failed"
-        cat "$TMP_DIR/${name}.compile_err" | sed 's/^/    /'
-        FAIL=$((FAIL + 1))
-        return
-    fi
-
-    local actual
-    if ! actual=$(timeout "$timeout_secs" "$exe_file" 2>"$TMP_DIR/${name}.run_err"); then
-        local exit_code=$?
-        if [ $exit_code -eq 124 ]; then
-            echo -e "  ${RED}FAIL${NC} $name — timed out after ${timeout_secs}s"
-        else
-            echo -e "  ${RED}FAIL${NC} $name — runtime error (exit code $exit_code)"
-            cat "$TMP_DIR/${name}.run_err" | sed 's/^/    /'
-        fi
-        FAIL=$((FAIL + 1))
-        return
-    fi
-
-    # Strip Windows CR so CRLF output compares cleanly against LF expected strings.
-    actual=$(printf '%s' "$actual" | tr -d '\r')
-
-    if [ "$VERBOSE" = true ]; then
-        echo -e "  --- $name output ---"
-        echo "$actual" | sed 's/^/    /'
-        echo -e "  ---"
-    fi
-
-    if [ "$actual" = "$expected" ]; then
-        echo -e "  ${GREEN}PASS${NC} $name"
-        PASS=$((PASS + 1))
-    else
-        echo -e "  ${RED}FAIL${NC} $name — output mismatch"
-        echo "    Expected:"
-        echo "$expected" | sed 's/^/      /'
-        echo "    Actual:"
-        echo "$actual" | sed 's/^/      /'
-        FAIL=$((FAIL + 1))
-    fi
-}
-
-# ---------------------------------------------------------------------------
-# run_orca_negative_test NAME TOML_PATH [EXPECTED_ERR_SUBSTRING]
-#   Build an orca project and verify the build FAILS (non-zero exit).
-#   Optionally, check that stderr contains EXPECTED_ERR_SUBSTRING.
-# ---------------------------------------------------------------------------
-run_orca_negative_test() {
-    local name="$1"
-    local toml_path="$2"
-    local expected_err="${3:-}"
-
-    TOTAL=$((TOTAL + 1))
-
-    local orca_bin
-    orca_bin="$(dirname "$COMPILER")/orca"
-
-    if "$orca_bin" --project "$toml_path" \
-            2>"$TMP_DIR/${name}.build_err" 1>/dev/null; then
-        echo -e "  ${RED}FAIL${NC} $name — expected orca build failure but it succeeded"
-        FAIL=$((FAIL + 1))
-        return
-    fi
-
-    if [ -n "$expected_err" ]; then
-        if grep -qF "$expected_err" "$TMP_DIR/${name}.build_err"; then
-            echo -e "  ${GREEN}PASS${NC} $name (correctly rejected with expected error)"
-            PASS=$((PASS + 1))
-        else
-            echo -e "  ${RED}FAIL${NC} $name — orca rejected but error message didn't match"
-            echo "    Expected stderr to contain: $expected_err"
-            echo "    Actual stderr:"
-            cat "$TMP_DIR/${name}.build_err" | sed 's/^/      /'
-            FAIL=$((FAIL + 1))
-        fi
-    else
-        echo -e "  ${GREEN}PASS${NC} $name (correctly rejected)"
-        PASS=$((PASS + 1))
-    fi
-}
-
-# ---------------------------------------------------------------------------
-# run_orca_run_test NAME TOML_PATH EXPECTED_OUTPUT [TIMEOUT]
-#   Run `orca run --project TOML_PATH -o TMP_EXE` and verify that the binary's
-#   stdout (lines not prefixed with "[orca]") matches EXPECTED_OUTPUT.
-# ---------------------------------------------------------------------------
-run_orca_run_test() {
-    local name="$1"
-    local toml_path="$2"
-    local expected="$3"
-    local timeout_secs="${4:-30}"
-
-    TOTAL=$((TOTAL + 1))
-
-    local exe_file="$TMP_DIR/${name}_run"
-    local orca_bin
-    orca_bin="$(dirname "$COMPILER")/orca"
-
-    local raw_output
-    if ! raw_output=$(timeout "$timeout_secs" "$orca_bin" run \
-            --project "$toml_path" -o "$exe_file" 2>/dev/null); then
-        local exit_code=$?
-        if [ $exit_code -eq 124 ]; then
-            echo -e "  ${RED}FAIL${NC} $name — timed out after ${timeout_secs}s"
-        else
-            echo -e "  ${RED}FAIL${NC} $name — orca run failed (exit $exit_code)"
-        fi
-        FAIL=$((FAIL + 1))
-        return
-    fi
-
-    # Filter out [orca] build-diagnostic lines; the remainder is the binary's output.
-    # Also strip Windows CR from CRLF executables.
-    local actual
-    actual=$(echo "$raw_output" | grep -v '^\[orca\]' | tr -d '\r' || true)
-
-    if [ "$actual" = "$expected" ]; then
-        echo -e "  ${GREEN}PASS${NC} $name"
-        PASS=$((PASS + 1))
-    else
-        echo -e "  ${RED}FAIL${NC} $name — output mismatch"
-        echo "    Expected: $(echo "$expected" | head -3)"
-        echo "    Actual:   $(echo "$actual" | head -3)"
-        FAIL=$((FAIL + 1))
-    fi
-}
-
-# ---------------------------------------------------------------------------
-# run_orca_clean_test NAME TOML_PATH
-#   Build the orca project, then clean it, and verify build/orca/ is removed.
-# ---------------------------------------------------------------------------
-run_orca_clean_test() {
-    local name="$1"
-    local toml_path="$2"
-
-    TOTAL=$((TOTAL + 1))
-
-    local orca_bin
-    orca_bin="$(dirname "$COMPILER")/orca"
-    local toml_dir
-    toml_dir="$(dirname "$toml_path")"
-
-    # Build first to create artifacts.
-    if ! "$orca_bin" --project "$toml_path" -o "$TMP_DIR/${name}_clean_bin" \
-            >/dev/null 2>&1; then
-        echo -e "  ${RED}FAIL${NC} $name — setup build failed"
-        FAIL=$((FAIL + 1))
-        return
-    fi
-
-    local build_orca_dir="$toml_dir/build/orca"
-    if [ ! -d "$build_orca_dir" ]; then
-        echo -e "  ${RED}FAIL${NC} $name — build/orca not created by build step"
-        FAIL=$((FAIL + 1))
-        return
-    fi
-
-    # Now clean.
-    if ! "$orca_bin" clean --project "$toml_path" >/dev/null 2>&1; then
-        echo -e "  ${RED}FAIL${NC} $name — orca clean failed"
-        FAIL=$((FAIL + 1))
-        return
-    fi
-
-    if [ -d "$build_orca_dir" ]; then
-        echo -e "  ${RED}FAIL${NC} $name — build/orca still exists after clean"
-        FAIL=$((FAIL + 1))
-        return
-    fi
-
-    echo -e "  ${GREEN}PASS${NC} $name"
-    PASS=$((PASS + 1))
-}
-
-# ---------------------------------------------------------------------------
-# run_orca_smoke_test NAME TOML_PATH STDIN_INPUT [TIMEOUT]
-#   Build an orca project and run the executable with piped STDIN_INPUT.
-#   Only verifies that the build and execution both succeed (exit 0).
-#   Use this for interactive or non-deterministic programs whose output
-#   cannot be compared exactly (e.g. games that use randomness).
-# ---------------------------------------------------------------------------
-run_orca_smoke_test() {
-    local name="$1"
-    local toml_path="$2"
-    local stdin_input="$3"
-    local timeout_secs="${4:-30}"
-
-    TOTAL=$((TOTAL + 1))
-
-    local exe_file="$TMP_DIR/${name}"
-    local orca_bin
-    orca_bin="$(dirname "$COMPILER")/orca"
-
-    if ! "$orca_bin" --project "$toml_path" -o "$exe_file" \
-            2>"$TMP_DIR/${name}.compile_err" 1>/dev/null; then
-        echo -e "  ${RED}FAIL${NC} $name — orca build failed"
-        cat "$TMP_DIR/${name}.compile_err" | sed 's/^/    /'
-        FAIL=$((FAIL + 1))
-        return
-    fi
-
-    if ! printf '%s' "$stdin_input" | timeout "$timeout_secs" "$exe_file" \
-            >"$TMP_DIR/${name}.out" 2>"$TMP_DIR/${name}.run_err"; then
-        local exit_code=$?
-        if [ $exit_code -eq 124 ]; then
-            echo -e "  ${RED}FAIL${NC} $name — timed out after ${timeout_secs}s"
-        else
-            echo -e "  ${RED}FAIL${NC} $name — runtime error (exit code $exit_code)"
-            cat "$TMP_DIR/${name}.run_err" | sed 's/^/    /'
-        fi
-        FAIL=$((FAIL + 1))
-        return
-    fi
-
-    if [ "$VERBOSE" = true ]; then
-        echo -e "  --- $name output ---"
-        cat "$TMP_DIR/${name}.out" | tr -d '\r' | sed 's/^/    /'
-        echo -e "  ---"
-    fi
-
-    echo -e "  ${GREEN}PASS${NC} $name"
-    PASS=$((PASS + 1))
-}
-
-# ---------------------------------------------------------------------------
-# run_orca_check_test NAME TOML_PATH EXPECT_PASS [EXPECTED_ERR_SUBSTRING]
-#   Run `orca check --project TOML_PATH`.
-#   If EXPECT_PASS is "pass", verify exit 0.  If "fail", verify exit non-zero.
-# ---------------------------------------------------------------------------
-run_orca_check_test() {
-    local name="$1"
-    local toml_path="$2"
-    local expect_pass="$3"   # "pass" or "fail"
-    local expected_err="${4:-}"
-
-    TOTAL=$((TOTAL + 1))
-
-    local orca_bin
-    orca_bin="$(dirname "$COMPILER")/orca"
-
-    local check_stderr="$TMP_DIR/${name}.check_err"
-    if "$orca_bin" check --project "$toml_path" \
-            >/dev/null 2>"$check_stderr"; then
-        local succeeded=true
-    else
-        local succeeded=false
-    fi
-
-    if [ "$expect_pass" = "pass" ]; then
-        if [ "$succeeded" = true ]; then
-            echo -e "  ${GREEN}PASS${NC} $name"
-            PASS=$((PASS + 1))
-        else
-            echo -e "  ${RED}FAIL${NC} $name — orca check failed on valid project"
-            cat "$check_stderr" | sed 's/^/    /'
-            FAIL=$((FAIL + 1))
-        fi
-    else
-        if [ "$succeeded" = false ]; then
-            if [ -n "$expected_err" ] && ! grep -qF "$expected_err" "$check_stderr"; then
-                echo -e "  ${RED}FAIL${NC} $name — check failed but wrong error message"
-                cat "$check_stderr" | sed 's/^/    /'
-                FAIL=$((FAIL + 1))
+    
+    # Compile
+    if ! "$COMPILER" "$src_file" -o "$exe_file" 2>"$TMP_DIR/${id}.compile_err"; then
+        if [ "$kind" = "compiler-negative" ]; then
+            # Expected to fail - check for expected error if present
+            if [ -f "$expected_stderr" ]; then
+                expected_err=$(cat "$expected_stderr")
+                actual_err=$(cat "$TMP_DIR/${id}.compile_err")
+                if grep -qF "$expected_err" "$TMP_DIR/${id}.compile_err"; then
+                    echo -e "  ${GREEN}PASS${NC} (correctly rejected)"
+                    PASS=$((PASS + 1))
+                else
+                    echo -e "  ${RED}FAIL${NC} error mismatch"
+                    echo "    Expected: $expected_err"
+                    echo "    Got:"
+                    cat "$TMP_DIR/${id}.compile_err" | sed 's/^/      /'
+                    FAIL=$((FAIL + 1))
+                fi
             else
-                echo -e "  ${GREEN}PASS${NC} $name (correctly reported error)"
+                echo -e "  ${GREEN}PASS${NC} (correctly rejected)"
                 PASS=$((PASS + 1))
             fi
         else
-            echo -e "  ${RED}FAIL${NC} $name — orca check passed on invalid project"
+            echo -e "  ${RED}FAIL${NC} compilation failed"
+            cat "$TMP_DIR/${id}.compile_err" | sed 's/^/    /'
             FAIL=$((FAIL + 1))
         fi
+        return
+    fi
+    
+    # For negative tests, failing to compile is already a pass
+    if [ "$kind" = "compiler-negative" ]; then
+        echo -e "  ${RED}FAIL${NC} expected compilation failure but succeeded"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    
+    # Run executable
+    local actual exit_code
+    if [ -f "$stdin_file" ]; then
+        actual=$(cat "$stdin_file" | timeout "$timeout" "$exe_file" 2>"$TMP_DIR/${id}.run_err") || exit_code=$?
+    else
+        actual=$(timeout "$timeout" "$exe_file" 2>"$TMP_DIR/${id}.run_err") || exit_code=$?
+    fi
+    exit_code=${exit_code:-0}
+    
+    if [ $exit_code -eq 124 ]; then
+        echo -e "  ${RED}FAIL${NC} timed out after ${timeout}s"
+        FAIL=$((FAIL + 1))
+        return
+    elif [ $exit_code -ne 0 ]; then
+        echo -e "  ${RED}FAIL${NC} runtime error (exit code $exit_code)"
+        cat "$TMP_DIR/${id}.run_err" | sed 's/^/    /'
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    
+    # Validate stdout if expected file exists
+    if [ -f "$expected_stdout" ]; then
+        actual=$(printf '%s' "$actual" | normalize_output)
+        expected=$(cat "$expected_stdout" | normalize_output)
+        
+        if [ "$actual" = "$expected" ]; then
+            echo -e "  ${GREEN}PASS${NC}"
+            PASS=$((PASS + 1))
+        else
+            echo -e "  ${RED}FAIL${NC} output mismatch"
+            echo "    Expected:"
+            echo "$expected" | sed 's/^/      /'
+            echo "    Actual:"
+            echo "$actual" | sed 's/^/      /'
+            FAIL=$((FAIL + 1))
+        fi
+    else
+        # No stdout validation - just check it ran
+        echo -e "  ${GREEN}PASS${NC}"
+        PASS=$((PASS + 1))
     fi
 }
 
+run_orca_test() {
+    local case_dir="$1" id="$2" kind="$3" timeout="$4"
+    local project_file="$case_dir/orca.toml"
+    local expected_stdout="$case_dir/stdout.txt"
+    local expected_stderr="$case_dir/stderr.txt"
+    local stdin_file="$case_dir/stdin.txt"
+    local exe_file="$TMP_DIR/${id}.exe"
+    
+    # Verify orca.toml exists
+    if [ ! -f "$project_file" ]; then
+        echo -e "  ${RED}FAIL${NC} orca.toml not found"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    
+    case "$kind" in
+        orca-positive) run_orca_positive "$case_dir" "$id" "$timeout" "$exe_file" "$expected_stdout" ;;
+        orca-negative) run_orca_negative "$case_dir" "$id" "$expected_stderr" ;;
+        orca-run) run_orca_run "$case_dir" "$id" "$timeout" "$exe_file" "$expected_stdout" ;;
+        orca-clean) run_orca_clean "$case_dir" "$id" ;;
+        orca-check-pass) run_orca_check_pass "$case_dir" "$id" ;;
+        orca-check-fail) run_orca_check_fail "$case_dir" "$id" "$expected_stderr" ;;
+        orca-smoke) run_orca_smoke "$case_dir" "$id" "$timeout" "$stdin_file" ;;
+        *)
+            echo -e "  ${YELLOW}SKIP${NC} unknown orca kind '$kind'"
+            SKIP=$((SKIP + 1))
+            ;;
+    esac
+}
+
+run_orca_positive() {
+    local case_dir="$1" id="$2" timeout="$3" exe_file="$4" expected_stdout="$5"
+    local project_file="$case_dir/orca.toml"
+    
+    if ! "$ORCA_BIN" --project "$project_file" -o "$exe_file" 2>"$TMP_DIR/${id}.build_err" >/dev/null; then
+        echo -e "  ${RED}FAIL${NC} orca build failed"
+        cat "$TMP_DIR/${id}.build_err" | sed 's/^/    /'
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    
+    if ! actual=$(timeout "$timeout" "$exe_file" 2>"$TMP_DIR/${id}.run_err"); then
+        exit_code=$?
+        if [ $exit_code -eq 124 ]; then
+            echo -e "  ${RED}FAIL${NC} timed out after ${timeout}s"
+        else
+            echo -e "  ${RED}FAIL${NC} runtime error (exit code $exit_code)"
+            cat "$TMP_DIR/${id}.run_err" | sed 's/^/    /'
+        fi
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    
+    if [ -f "$expected_stdout" ]; then
+        actual=$(printf '%s' "$actual" | normalize_output)
+        expected=$(cat "$expected_stdout" | normalize_output)
+        
+        if [ "$actual" = "$expected" ]; then
+            echo -e "  ${GREEN}PASS${NC}"
+            PASS=$((PASS + 1))
+        else
+            echo -e "  ${RED}FAIL${NC} output mismatch"
+            echo "    Expected:"
+            echo "$expected" | sed 's/^/      /'
+            echo "    Actual:"
+            echo "$actual" | sed 's/^/      /'
+            FAIL=$((FAIL + 1))
+        fi
+    else
+        echo -e "  ${GREEN}PASS${NC}"
+        PASS=$((PASS + 1))
+    fi
+}
+
+run_orca_negative() {
+    local case_dir="$1" id="$2" expected_stderr="$3"
+    local project_file="$case_dir/orca.toml"
+    
+    if "$ORCA_BIN" --project "$project_file" 2>"$TMP_DIR/${id}.build_err" >/dev/null; then
+        echo -e "  ${RED}FAIL${NC} expected orca build failure but succeeded"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    
+    if [ -f "$expected_stderr" ]; then
+        expected_err=$(cat "$expected_stderr")
+        if grep -qF "$expected_err" "$TMP_DIR/${id}.build_err"; then
+            echo -e "  ${GREEN}PASS${NC} (correctly rejected)"
+            PASS=$((PASS + 1))
+        else
+            echo -e "  ${RED}FAIL${NC} error mismatch"
+            echo "    Expected: $expected_err"
+            cat "$TMP_DIR/${id}.build_err" | sed 's/^/      /'
+            FAIL=$((FAIL + 1))
+        fi
+    else
+        echo -e "  ${GREEN}PASS${NC} (correctly rejected)"
+        PASS=$((PASS + 1))
+    fi
+}
+
+run_orca_run() {
+    local case_dir="$1" id="$2" timeout="$3" exe_file="$4" expected_stdout="$5"
+    local project_file="$case_dir/orca.toml"
+    
+    if ! raw=$(timeout "$timeout" "$ORCA_BIN" run --project "$project_file" -o "$exe_file" 2>"$TMP_DIR/${id}.run_err"); then
+        exit_code=$?
+        if [ $exit_code -eq 124 ]; then
+            echo -e "  ${RED}FAIL${NC} timed out after ${timeout}s"
+        else
+            echo -e "  ${RED}FAIL${NC} orca run failed (exit code $exit_code)"
+            cat "$TMP_DIR/${id}.run_err" | sed 's/^/    /'
+        fi
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    
+    actual=$(printf '%s' "$raw" | grep -v '^\[orca\]' | normalize_output || true)
+    
+    if [ -f "$expected_stdout" ]; then
+        expected=$(cat "$expected_stdout" | normalize_output)
+        if [ "$actual" = "$expected" ]; then
+            echo -e "  ${GREEN}PASS${NC}"
+            PASS=$((PASS + 1))
+        else
+            echo -e "  ${RED}FAIL${NC} output mismatch"
+            echo "    Expected:"
+            echo "$expected" | sed 's/^/      /'
+            echo "    Actual:"
+            echo "$actual" | sed 's/^/      /'
+            FAIL=$((FAIL + 1))
+        fi
+    else
+        echo -e "  ${GREEN}PASS${NC}"
+        PASS=$((PASS + 1))
+    fi
+}
+
+run_orca_clean() {
+    local case_dir="$1" id="$2"
+    local project_file="$case_dir/orca.toml"
+    local project_dir="$(dirname "$project_file")"
+    local build_orca_dir="$project_dir/build/orca"
+    
+    if ! "$ORCA_BIN" --project "$project_file" -o "$TMP_DIR/${id}.clean.exe" >/dev/null 2>"$TMP_DIR/${id}.build_err"; then
+        echo -e "  ${RED}FAIL${NC} setup build failed"
+        cat "$TMP_DIR/${id}.build_err" | sed 's/^/    /'
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    
+    if [ ! -d "$build_orca_dir" ]; then
+        echo -e "  ${RED}FAIL${NC} build/orca not created"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    
+    if ! "$ORCA_BIN" clean --project "$project_file" >/dev/null 2>"$TMP_DIR/${id}.clean_err"; then
+        echo -e "  ${RED}FAIL${NC} orca clean failed"
+        cat "$TMP_DIR/${id}.clean_err" | sed 's/^/    /'
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    
+    if [ -d "$build_orca_dir" ]; then
+        echo -e "  ${RED}FAIL${NC} build/orca still exists after clean"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    
+    echo -e "  ${GREEN}PASS${NC}"
+    PASS=$((PASS + 1))
+}
+
+run_orca_check_pass() {
+    local case_dir="$1" id="$2"
+    local project_file="$case_dir/orca.toml"
+    
+    if "$ORCA_BIN" check --project "$project_file" >/dev/null 2>"$TMP_DIR/${id}.check_err"; then
+        echo -e "  ${GREEN}PASS${NC}"
+        PASS=$((PASS + 1))
+    else
+        echo -e "  ${RED}FAIL${NC} orca check failed"
+        cat "$TMP_DIR/${id}.check_err" | sed 's/^/    /'
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+run_orca_check_fail() {
+    local case_dir="$1" id="$2" expected_stderr="$3"
+    local project_file="$case_dir/orca.toml"
+    
+    if "$ORCA_BIN" check --project "$project_file" >/dev/null 2>"$TMP_DIR/${id}.check_err"; then
+        echo -e "  ${RED}FAIL${NC} orca check passed but should fail"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    
+    if [ -f "$expected_stderr" ]; then
+        expected_err=$(cat "$expected_stderr")
+        if grep -qF "$expected_err" "$TMP_DIR/${id}.check_err"; then
+            echo -e "  ${GREEN}PASS${NC} (correctly reported error)"
+            PASS=$((PASS + 1))
+        else
+            echo -e "  ${RED}FAIL${NC} check failed but error did not match"
+            cat "$TMP_DIR/${id}.check_err" | sed 's/^/      /'
+            FAIL=$((FAIL + 1))
+        fi
+    else
+        echo -e "  ${GREEN}PASS${NC} (correctly reported error)"
+        PASS=$((PASS + 1))
+    fi
+}
+
+run_orca_smoke() {
+    local case_dir="$1" id="$2" timeout="$3" stdin_file="$4"
+    local project_file="$case_dir/orca.toml"
+    local exe_file="$TMP_DIR/${id}.smoke.exe"
+    
+    if ! "$ORCA_BIN" --project "$project_file" -o "$exe_file" >/dev/null 2>"$TMP_DIR/${id}.build_err"; then
+        echo -e "  ${RED}FAIL${NC} orca build failed"
+        cat "$TMP_DIR/${id}.build_err" | sed 's/^/    /'
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    
+    if [ -f "$stdin_file" ]; then
+        if ! cat "$stdin_file" | timeout "$timeout" "$exe_file" >"$TMP_DIR/${id}.out" 2>"$TMP_DIR/${id}.run_err"; then
+            exit_code=$?
+            if [ $exit_code -eq 124 ]; then
+                echo -e "  ${RED}FAIL${NC} timed out after ${timeout}s"
+            else
+                echo -e "  ${RED}FAIL${NC} runtime error (exit code $exit_code)"
+                cat "$TMP_DIR/${id}.run_err" | sed 's/^/    /'
+            fi
+            FAIL=$((FAIL + 1))
+            return
+        fi
+    else
+        if ! timeout "$timeout" "$exe_file" >"$TMP_DIR/${id}.out" 2>"$TMP_DIR/${id}.run_err"; then
+            exit_code=$?
+            if [ $exit_code -eq 124 ]; then
+                echo -e "  ${RED}FAIL${NC} timed out after ${timeout}s"
+            else
+                echo -e "  ${RED}FAIL${NC} runtime error (exit code $exit_code)"
+                cat "$TMP_DIR/${id}.run_err" | sed 's/^/    /'
+            fi
+            FAIL=$((FAIL + 1))
+            return
+        fi
+    fi
+    
+    echo -e "  ${GREEN}PASS${NC}"
+    PASS=$((PASS + 1))
+}
 
 echo "Compiler: $COMPILER"
+echo "E2E Root: $E2E_DIR"
 echo ""
 
-# --- hello_world.bf ---
-run_test "hello_world" "$TESTS_DIR/hello_world.bf" "Hello, World!"
+if ! command -v jq >/dev/null 2>&1; then
+    echo -e "${RED}FAIL${NC} jq not found (required to parse metadata.json)"
+    exit 1
+fi
 
-# --- fib.bf ---
-run_test "fib" "$TESTS_DIR/fib.bf" "$(printf '0\n1\n1\n2\n3\n5\n8\n13\n21\n34')"
+if [ ! -x "$COMPILER" ]; then
+    echo -e "${RED}FAIL${NC} compiler executable not found or not executable: $COMPILER"
+    exit 1
+fi
 
-# --- if_else.bf ---
-run_test "if_else" "$TESTS_DIR/if_else.bf" "Odd"
+if [ ! -x "$ORCA_BIN" ]; then
+    echo -e "${RED}FAIL${NC} orca executable not found or not executable: $ORCA_BIN"
+    exit 1
+fi
 
-# --- while_loop.bf ---
-run_test "while_loop" "$TESTS_DIR/while_loop.bf" "$(printf '0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10')"
+mapfile -t METADATA_FILES < <(find "$E2E_DIR" -type f -name metadata.json | sort)
+if [ ${#METADATA_FILES[@]} -eq 0 ]; then
+    echo -e "${YELLOW}SKIP${NC} no e2e cases discovered under $E2E_DIR"
+    exit 0
+fi
 
-# --- match.bf ---
-run_test "match" "$TESTS_DIR/match.bf" "High state matched"
-
-# --- operators.bf ---
-# a=3,b=2,c=8,d=5,e=1, comparisons, logical, bitwise (f=3,g=15,h=1,j=12,k=1),
-# compound: 3+5=8, 8-3=5, 5*2=10, 10/4=2, 2%3=2, ++→3, --→2
-OPERATORS_EXPECTED="$(printf '3\n2\n8\n5\n1\na == 3\na != 0\na < 5\na > 1\na <= 3\na >= 3\na > 0 && b > 0\na > 0 || b > 0\n!false\na > 0 ^^ b > 0 is false\n3\n15\n1\n-4\n12\n1\n8\n5\n10\n2\n2\n3\n2')"
-run_test "operators" "$TESTS_DIR/operators.bf" "$OPERATORS_EXPECTED"
-
-# --- break_continue.bf ---
-# Prints 0,1, skips 2 (continue), prints 3-6, breaks at 7.
-run_test "break_continue" "$TESTS_DIR/break_continue.bf" "$(printf '0\n1\n3\n4\n5\n6')"
-
-# --- struct.bf ---
-run_test "struct" "$TESTS_DIR/struct.bf" "Hi I am Peter, and I am 21 years old"
-
-# --- constructor.bf ---
-run_test "constructor" "$TESTS_DIR/constructor.bf" "Area: 22"
-
-# --- containers.bf ---
-CONTAINERS_EXPECTED="$(printf '[0, 1, 2, 3, 4, 5]\n[0, 1, 4, 9, 16, 25]\n{200: Ok, 201: Created, 404: Not Found}')"
-run_test "containers" "$TESTS_DIR/containers.bf" "$CONTAINERS_EXPECTED"
-
-# --- enums.bf ---
-# Tests enum declaration, variable assignment, equality comparison, enum param/return.
-run_test "enums" "$TESTS_DIR/enums.bf" "$(printf 'NORTH\nSOUTH\nHeading north\nEAST\nWEST')"
-
-# --- composition.bf ---
-run_test "composition" "$TESTS_DIR/composition.bf" "Circle center: (10, 20), radius: 5.5"
-
-# --- trig_function.bf (negative: must fail — conflicts with stdlib without 'overridden') ---
-echo ""
-echo "--- Negative Tests ---"
-run_negative_test "trig_function_no_override" \
-    "$TESTS_DIR/trig_function.bf" \
-    "conflicts with a stdlib math function"
-
-# --- enum_int_assign.bf (negative: assigning integer to enum variable must fail) ---
-run_negative_test "enum_int_assign" \
-    "$TESTS_DIR/enum_int_assign.bf" \
-    "cannot assign integer"
-
-# --- enum_int_compare.bf (negative: comparing enum with integer must fail) ---
-run_negative_test "enum_int_compare" \
-    "$TESTS_DIR/enum_int_compare.bf" \
-    "Enum values can only be compared"
-
-# --- trig_function_overridden.bf (positive: user-defined math with 'overridden') ---
-echo ""
-echo "--- Stdlib Override Tests ---"
-TRIG_EXPECTED="$(printf '1\n-1\n1')"
-run_test "trig_function_overridden" "$TESTS_DIR/trig_function_overridden.bf" "$TRIG_EXPECTED"
-
-# --- module_example orca project (cross-module imports/exports) ---
-echo ""
-echo "--- Orca Multi-Module Tests ---"
-MODULE_EXPECTED="$(printf '25\n12\n12')"
-run_orca_test "module_example" "$TESTS_DIR/module_example/orca.toml" "$MODULE_EXPECTED"
-
-# --- overridden_import_alias: import abs as myAbs from math.utils ---
-run_orca_test "overridden_import_alias" \
-    "$TESTS_DIR/overridden_import_alias/orca.toml" \
-    "$(printf '7\n3\n42')"
-
-# --- overridden_import_qualified: import math.utils; utils.abs() ---
-run_orca_test "overridden_import_qualified" \
-    "$TESTS_DIR/overridden_import_qualified/orca.toml" \
-    "$(printf '7\n3\n42')"
-
-# --- overridden_import_direct_negative: import abs from math.utils (no alias → must fail) ---
-run_orca_negative_test "overridden_import_direct_neg" \
-    "$TESTS_DIR/overridden_import_direct_negative/orca.toml" \
-    "conflicts with"
-
-# --- null_safety: nullable struct semantics ---
-# Tests: default null, explicit null, constructor init, reassign to null, struct-literal init.
-# No negative (null-dereference) test here: that would be a runtime segfault, not a compile
-# error. Compile-time null-dereference detection is deferred to Phase 7 (semantic analysis).
-echo ""
-echo "--- Nullable Struct Tests ---"
-NULL_SAFETY_EXPECTED="$(printf 'PASS: r is null by default\nPASS: r is null via explicit assignment\nPASS: r is not null, area = 12\nPASS: r is null after reassignment\nPASS: struct init, area = 30')"
-run_orca_test "null_safety" "$TESTS_DIR/null_safety/orca.toml" "$NULL_SAFETY_EXPECTED"
-
-# --- orca subcommand tests: run / clean / check ---
-echo ""
-echo "--- Orca Subcommand Tests (run / clean / check) ---"
-
-# orca run: build then execute module_example, verifying binary output.
-run_orca_run_test "orca_run_module_example" \
-    "$TESTS_DIR/module_example/orca.toml" \
-    "$(printf '25\n12\n12')"
-
-# orca clean: build/orca/ is removed and does not re-appear.
-run_orca_clean_test "orca_clean_module_example" \
-    "$TESTS_DIR/module_example/orca.toml"
-
-# orca check: valid project reports no errors.
-run_orca_check_test "orca_check_valid" \
-    "$TESTS_DIR/module_example/orca.toml" pass
-
-# orca check: project with a syntax error is rejected.
-mkdir -p "$TMP_DIR/check_bad/src"
-cat > "$TMP_DIR/check_bad/orca.toml" << 'TOML'
-[project]
-name    = "check_bad"
-version = "0.1.0"
-entry   = "src/main.bf"
-TOML
-printf 'main(): int { x: int = ; return 0; }\n' > "$TMP_DIR/check_bad/src/main.bf"
-run_orca_check_test "orca_check_invalid" \
-    "$TMP_DIR/check_bad/orca.toml" fail "error:"
-
-# --- enums_blackjack: multi-file game with enums, structs, embedded fields, RNG ---
-# Output is non-deterministic (shuffled deck), so we only verify build + clean exit.
-# Input: player name "Alice", stand immediately, then quit.
-echo ""
-echo "--- Interactive / Non-deterministic Tests ---"
-run_orca_smoke_test "blackjack" \
-    "$TESTS_DIR/blackjack/orca.toml" \
-    "$(printf 'Alice\ns\nn\n')"
+for metadata_file in "${METADATA_FILES[@]}"; do
+    TOTAL=$((TOTAL + 1))
+    case_dir="$(dirname "$metadata_file")"
+    run_test "$case_dir" "$metadata_file"
+done
 
 echo ""
 echo "=== Results ==="
@@ -596,6 +526,8 @@ if [ $SKIP -gt 0 ]; then
     echo -e "  ${YELLOW}Skipped: $SKIP${NC}"
 fi
 echo "  Total:  $TOTAL"
+echo ""
+echo "  Elapsed: $(format_duration $TOTAL_ELAPSED)"
 
 if [ $FAIL -gt 0 ]; then
     exit 1

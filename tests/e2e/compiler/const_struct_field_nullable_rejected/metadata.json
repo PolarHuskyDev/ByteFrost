@@ -1,0 +1,7 @@
+{
+  "id": "const_struct_field_nullable_rejected",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Const struct field cannot be nullable",
+  "timeoutSeconds": 10
+}

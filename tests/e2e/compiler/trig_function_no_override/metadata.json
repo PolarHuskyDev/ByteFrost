@@ -1,0 +1,7 @@
+{
+  "id": "trig_function_no_override",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Disallow stdlib function shadowing without override",
+  "timeoutSeconds": 10
+}

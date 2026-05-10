@@ -1,0 +1,7 @@
+{
+  "id": "break_outside_loop",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Break outside loop must fail",
+  "timeoutSeconds": 10
+}

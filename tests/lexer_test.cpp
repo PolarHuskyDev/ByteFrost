@@ -114,8 +114,8 @@ TEST(LexerBasic, ComparisonOperators) {
 TEST(LexerKeywords, AllKeywords) {
 	auto tokens =
 		lex("if else elseif for while return break continue match struct true false this in void int float bool char "
-			"string array slice map");
-	ASSERT_EQ(tokens.size(), 24u);
+			"string array slice map const readonly");
+	ASSERT_EQ(tokens.size(), 26u);
 	expectToken(tokens[0], TokenType::IF_TOKEN, "if");
 	expectToken(tokens[1], TokenType::ELSE_TOKEN, "else");
 	expectToken(tokens[2], TokenType::ELSEIF_TOKEN, "elseif");
@@ -139,7 +139,9 @@ TEST(LexerKeywords, AllKeywords) {
 	expectToken(tokens[20], TokenType::ARRAY_TOKEN, "array");
 	expectToken(tokens[21], TokenType::SLICE_TOKEN, "slice");
 	expectToken(tokens[22], TokenType::MAP_TOKEN, "map");
-	expectToken(tokens[23], TokenType::EOF_TOKEN, "");
+	expectToken(tokens[23], TokenType::CONST_TOKEN, "const");
+	expectToken(tokens[24], TokenType::READONLY_TOKEN, "readonly");
+	expectToken(tokens[25], TokenType::EOF_TOKEN, "");
 }
 
 TEST(LexerKeywords, IdentifierVsKeyword) {
@@ -257,6 +259,17 @@ TEST(LexerOperators, DotDotRange) {
 	expectToken(tokens[1], TokenType::DOTDOT_TOKEN, "..");
 	expectToken(tokens[2], TokenType::INT_LITERAL_TOKEN, "10");
 	expectToken(tokens[3], TokenType::EOF_TOKEN, "");
+}
+
+TEST(LexerOperators, QuestionAndQuestionDot) {
+	auto tokens = lex("int? obj?.name");
+	ASSERT_EQ(tokens.size(), 6u);
+	expectToken(tokens[0], TokenType::INT_TOKEN, "int");
+	expectToken(tokens[1], TokenType::QUESTION_TOKEN, "?");
+	expectToken(tokens[2], TokenType::IDENTIFIER_TOKEN, "obj");
+	expectToken(tokens[3], TokenType::QUESTION_DOT_TOKEN, "?.");
+	expectToken(tokens[4], TokenType::IDENTIFIER_TOKEN, "name");
+	expectToken(tokens[5], TokenType::EOF_TOKEN, "");
 }
 
 TEST(LexerOperators, Underscore) {

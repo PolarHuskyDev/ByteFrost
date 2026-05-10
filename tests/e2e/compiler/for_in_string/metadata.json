@@ -1,0 +1,7 @@
+{
+  "id": "for_in_string",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "For-in loop iterating over string array",
+  "timeoutSeconds": 10
+}

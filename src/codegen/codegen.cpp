@@ -1,5 +1,8 @@
 #include "codegen/codegen.h"
 
+#include "bytefrost/hir/hir_builder.h"
+#include "bytefrost/semantic/semantic_context.h"
+
 #include <llvm/Analysis/AliasAnalysis.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Verifier.h>
@@ -126,56 +129,63 @@ void CodeGen::initializeTarget() {
 // ==========================
 
 void CodeGen::buildIR(const Program& program) {
+	// ------------------------------------------------------------------
+	// Phase 1 (Semantic) + Phase 2 (HIR) pipeline:
+	//   AST → SemanticContext (validate) → HIRBuilder (type-annotate) → HIRProgram
+	// All structural errors are caught by SemanticContext.  The LLVM lowering
+	// path below only consumes the fully-resolved HIRProgram.
+	// ------------------------------------------------------------------
+	bytefrost::SemanticContext semantic;
+	if (!semantic.analyze(program)) {
+		std::ostringstream diagText;
+		semantic.diagnostics().emit(diagText, /*useColor=*/false);
+		// Do NOT emit to stderr here — callers (main.cpp, orca) handle
+		// printing.  Emitting here causes noise in unit tests that
+		// intentionally trigger errors via EXPECT_THROW.
+		throw CodeGenError(diagText.str());
+	}
+
+	bytefrost::HIRBuilder hirBuilder(semantic);
+	bytefrost::HIRProgram hir = hirBuilder.build(program);
+
+	// ------------------------------------------------------------------
+	// LLVM lowering: HIRProgram → LLVM IR
+	// ------------------------------------------------------------------
 	declareBuiltins();
 
-	// Process import declarations:
-	//  - Collect alias mappings (import sin as mySin from ...).
-	//  - Register namespace imports (import math.utils → "utils").
-	//  - Fail fast if a stdlib math name is imported without an alias — the
-	//    unaliased name would silently resolve to the intrinsic instead of
-	//    the imported function, which is always a bug.
+	// Populate import alias / namespace maps (needed by generateCall).
 	importAliases_.clear();
 	namespaceNames_.clear();
-	for (const auto& imp : program.imports) {
-		if (imp->isNamespaceImport && !imp->modulePath.empty()) {
-			namespaceNames_.insert(imp->modulePath.back());
+	for (const auto& imp : hir.imports) {
+		if (imp.isNamespaceImport && !imp.modulePath.empty()) {
+			namespaceNames_.insert(imp.modulePath.back());
 		}
-		for (const auto& item : imp->items) {
+		for (const auto& item : imp.items) {
 			if (!item.alias.empty()) {
 				importAliases_[item.alias] = item.name;
-			} else if (stdlibMathNames().count(item.name)) {
-				throw CodeGenError(
-					"Importing '" + item.name + "' conflicts with the stdlib math function "
-					"of the same name. Use an alias: import " + item.name + " as <alias> from ...;");
 			}
 		}
 	}
 
-	// Detect stdlib math function conflicts.
-	// If a user defines a function whose name matches a stdlib math function
-	// without marking it 'overridden', emit a clear compile-time error.
+	// Track overridden stdlib math functions (needed by generateCall).
 	overriddenMathFuncs_.clear();
-	for (const auto& fn : program.functions) {
-		if (stdlibMathNames().count(fn->name)) {
-			if (!fn->isOverridden) {
-				throw CodeGenError(
-					"Function '" + fn->name + "' conflicts with a stdlib math function. "
-					"Use 'overridden' to shadow it.");
-			}
-			overriddenMathFuncs_.insert(fn->name);
+	for (const auto& fn : hir.functions) {
+		if (stdlibMathNames().count(fn.name) && fn.isOverridden) {
+			overriddenMathFuncs_.insert(fn.name);
 		}
 	}
+	// Also check struct methods (overridden trig etc. as methods is unusual but handle it).
 
-	// Register all struct types first (so they can be referenced).
-	registerEnumTypes(program);
-	registerStructTypes(program);
+	// Register all enum and struct types first (so they can be referenced).
+	registerEnumTypes(hir);
+	registerStructTypes(hir);
 
-	// Generate struct methods.
-	generateStructMethods(program);
+	// Generate struct method bodies.
+	generateStructMethods(hir);
 
-	// Generate all functions.
-	for (const auto& fn : program.functions) {
-		generateFunction(*fn);
+	// Generate all top-level functions.
+	for (const auto& fn : hir.functions) {
+		generateFunction(fn);
 	}
 
 	// Verify the module.
@@ -560,11 +570,82 @@ llvm::Type* CodeGen::getLLVMType(const TypeNode& type) {
 		return getOrCreateMapType(keyType, valType);
 	}
 
+	// Fallback for unresolved imported/generic element types represented as empty.
+	// Model as opaque pointer to keep reference-typed values (e.g. struct refs)
+	// codegen-able in module builds.
+	if (type.name.empty()) {
+		return llvm::PointerType::getUnqual(*context);
+	}
+
 	throw CodeGenError("Unsupported type: " + type.name);
 }
 
 bool CodeGen::isStringType(llvm::Type* type) const {
 	return type->isPointerTy();
+}
+
+/// Convert a BFType to its LLVM equivalent.
+/// Mirrors getLLVMType(TypeNode) but works with the semantic type directly.
+llvm::Type* CodeGen::getLLVMType(const bytefrost::BFType& type) {
+	using bytefrost::BFTypeKind;
+	switch (type.kind) {
+		case BFTypeKind::Int:    return llvm::Type::getInt64Ty(*context);
+		case BFTypeKind::Float:  return llvm::Type::getDoubleTy(*context);
+		case BFTypeKind::Bool:   return llvm::Type::getInt1Ty(*context);
+		case BFTypeKind::Char:   return llvm::Type::getInt8Ty(*context);
+		case BFTypeKind::String: return llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(*context));
+		case BFTypeKind::Void:   return llvm::Type::getVoidTy(*context);
+		case BFTypeKind::Enum:   return llvm::Type::getInt32Ty(*context);
+		case BFTypeKind::Struct:
+			if (structRegistry.count(type.name))
+				return llvm::PointerType::getUnqual(*context);
+			return llvm::PointerType::getUnqual(*context);  // extern struct
+		case BFTypeKind::Array:
+			if (type.elemType)
+				return getOrCreateArrayType(getLLVMType(*type.elemType));
+			return getOrCreateArrayType(llvm::Type::getInt64Ty(*context));
+		case BFTypeKind::Map:
+			if (type.keyType && type.valueType)
+				return getOrCreateMapType(getLLVMType(*type.keyType), getLLVMType(*type.valueType));
+			break;
+		case BFTypeKind::Unknown:
+			if (!type.name.empty()) {
+				if (enumRegistry.count(type.name))
+					return llvm::Type::getInt32Ty(*context);
+				if (structRegistry.count(type.name))
+					return llvm::PointerType::getUnqual(*context);
+			}
+			// Keep codegen robust for unresolved imported/reference-like types.
+			return llvm::PointerType::getUnqual(*context);
+		default: break;
+	}
+	return llvm::PointerType::getUnqual(*context);
+}
+
+/// Produce the string BF type name used in the scope tracking system.
+/// e.g. BFType::makeArray(Int) → "array<int>", BFType::makeStruct("Foo") → "Foo"
+std::string CodeGen::bfTypeToString(const bytefrost::BFType& t) const {
+	using bytefrost::BFTypeKind;
+	switch (t.kind) {
+		case BFTypeKind::Int:    return "int";
+		case BFTypeKind::Float:  return "float";
+		case BFTypeKind::Bool:   return "bool";
+		case BFTypeKind::Char:   return "char";
+		case BFTypeKind::String: return "string";
+		case BFTypeKind::Void:   return "void";
+		case BFTypeKind::Enum:   return t.name;
+		case BFTypeKind::Struct: return t.name;
+		case BFTypeKind::Array:
+			if (t.elemType) return "array<" + bfTypeToString(*t.elemType) + ">";
+			return "array<unknown>";
+		case BFTypeKind::Map:
+			if (t.keyType && t.valueType)
+				return "map<" + bfTypeToString(*t.keyType) + "," + bfTypeToString(*t.valueType) + ">";
+			return "map<unknown,unknown>";
+		case BFTypeKind::Unknown:
+			return t.name.empty() ? "" : t.name;
+		default: return "";
+	}
 }
 
 bool CodeGen::isFloatType(llvm::Type* type) const {
@@ -587,139 +668,74 @@ std::string CodeGen::getFormatSpecifier(llvm::Type* type) const {
 // Struct support
 // ==========================
 
-void CodeGen::registerStructTypes(const Program& program) {
-	// Build a map of struct name -> field type names for cycle detection.
-	std::map<std::string, std::vector<std::pair<std::string, std::string>>> structFields;
-	for (const auto& sd : program.structs) {
-		auto& fields = structFields[sd->name];
-		for (const auto& member : sd->members) {
-			if (member.kind == StructMember::FIELD) {
-				fields.emplace_back(member.fieldName, member.fieldType->name);
-			}
-		}
-	}
-
-	// DFS cycle detection: detect direct (A→A) and indirect (A→B→A) cycles.
-	std::set<std::string> visited, inStack;
-	std::function<void(const std::string&, std::vector<std::string>&)> detectCycle =
-		[&](const std::string& name, std::vector<std::string>& path) {
-			if (inStack.count(name)) {
-				// Build cycle description: find where the cycle starts in path.
-				std::string cycle;
-				bool inCycle = false;
-				for (const auto& p : path) {
-					if (p == name)
-						inCycle = true;
-					if (inCycle)
-						cycle += p + " -> ";
-				}
-				cycle += name;
-				throw CodeGenError(
-					"Cyclic struct dependency detected: " + cycle +
-					". Structs are value types and cannot form cycles "
-					"(infinite size). Future: use Box<T> for heap-allocated indirection.");
-			}
-			if (visited.count(name))
-				return;
-			visited.insert(name);
-			inStack.insert(name);
-			path.push_back(name);
-			if (structFields.count(name)) {
-				for (const auto& [fieldName, fieldType] : structFields.at(name)) {
-					if (structFields.count(fieldType)) {
-						detectCycle(fieldType, path);
-					}
-				}
-			}
-			path.pop_back();
-			inStack.erase(name);
-		};
-
-	for (const auto& sd : program.structs) {
-		std::vector<std::string> path;
-		detectCycle(sd->name, path);
-	}
-
-	// All structs are acyclic — safe to register types.
-	for (const auto& sd : program.structs) {
+void CodeGen::registerStructTypes(const bytefrost::HIRProgram& hir) {
+	using bytefrost::BFTypeKind;
+	// Cycle detection was already done by SemanticContext — all structs are acyclic.
+	for (const auto& hs : hir.structs) {
 		StructInfo info;
 
-		// Collect field types.
 		std::vector<llvm::Type*> fieldTypes;
-		for (const auto& member : sd->members) {
-			if (member.kind == StructMember::FIELD) {
-				llvm::Type* ft = getLLVMType(*member.fieldType);
-				info.fieldNames.push_back(member.fieldName);
-				info.fieldLLVMTypes.push_back(ft);
-				info.fieldIndices[member.fieldName] = fieldTypes.size();
-				fieldTypes.push_back(ft);
-				// Track BF type name for enum, struct, array<T>, and map<K,V> fields.
-				const std::string& ftName = member.fieldType->name;
-				if (enumRegistry.count(ftName) || structRegistry.count(ftName)) {
-					info.fieldBFTypeNames[member.fieldName] = ftName;
-				} else if (ftName == "array" && !member.fieldType->typeParams.empty()) {
-					info.fieldBFTypeNames[member.fieldName] =
-						"array<" + member.fieldType->typeParams[0]->name + ">";
-				} else if (ftName == "map" && member.fieldType->typeParams.size() >= 2) {
-					info.fieldBFTypeNames[member.fieldName] =
-						"map<" + member.fieldType->typeParams[0]->name + "," +
-						member.fieldType->typeParams[1]->name + ">";
-				}
+		for (const auto& field : hs.fields) {
+			llvm::Type* ft = getLLVMType(field.type);
+			info.fieldNames.push_back(field.name);
+			info.fieldLLVMTypes.push_back(ft);
+			info.fieldIndices[field.name] = fieldTypes.size();
+			fieldTypes.push_back(ft);
+			// Track BF type name for enum, struct, array<T>, and map<K,V> fields.
+			if (field.type.kind == BFTypeKind::Enum || field.type.kind == BFTypeKind::Struct) {
+				info.fieldBFTypeNames[field.name] = field.type.name;
+			} else if (field.type.kind == BFTypeKind::Unknown && !field.type.name.empty()
+				&& (enumRegistry.count(field.type.name) || structRegistry.count(field.type.name))) {
+				info.fieldBFTypeNames[field.name] = field.type.name;
+			} else if (field.type.kind == BFTypeKind::Array || field.type.kind == BFTypeKind::Map) {
+				info.fieldBFTypeNames[field.name] = bfTypeToString(field.type);
 			}
 		}
 
-		info.llvmType = llvm::StructType::create(*context, fieldTypes, sd->name);
+		info.llvmType = llvm::StructType::create(*context, fieldTypes, hs.name);
 
-		// Register method names, and pre-declare the LLVM function so call
-		// sites within the same struct (e.g. constructor calling shuffle) compile.
-		for (const auto& member : sd->members) {
-			if (member.kind == StructMember::METHOD) {
-				std::string mangledName = sd->name + "." + member.method->name;
-				info.methods[member.method->name] = mangledName;
-				if (member.method->name == "constructor") {
-					info.hasConstructor = true;
+		// Pre-declare methods so cross-method calls compile.
+		for (const auto& fn : hs.methods) {
+			std::string mangledName = hs.name + "." + fn.name;
+			info.methods[fn.name] = mangledName;
+			if (fn.name == "constructor") {
+				info.hasConstructor = true;
+			}
+			if (!module->getFunction(mangledName)) {
+				std::vector<llvm::Type*> paramTypes;
+				paramTypes.push_back(llvm::PointerType::getUnqual(*context));  // this
+				for (const auto& param : fn.params) {
+					paramTypes.push_back(getLLVMType(param.type));
 				}
-				if (!module->getFunction(mangledName)) {
-					std::vector<llvm::Type*> paramTypes;
-					paramTypes.push_back(llvm::PointerType::getUnqual(*context));  // this
-					for (const auto& param : member.method->params) {
-						paramTypes.push_back(getLLVMType(*param.type));
-					}
-					llvm::Type* retType = getLLVMType(*member.method->returnType);
-					auto* funcType = llvm::FunctionType::get(retType, paramTypes, false);
-					llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, mangledName, module.get());
-				}
+				llvm::Type* retType = getLLVMType(fn.returnType);
+				auto* funcType = llvm::FunctionType::get(retType, paramTypes, false);
+				llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, mangledName, module.get());
 			}
 		}
 
-		structRegistry[sd->name] = std::move(info);
+		structRegistry[hs.name] = std::move(info);
 	}
 }
 
-void CodeGen::generateStructMethods(const Program& program) {
-	for (const auto& sd : program.structs) {
-		auto& info = structRegistry.at(sd->name);
+void CodeGen::generateStructMethods(const bytefrost::HIRProgram& hir) {
+	using bytefrost::BFTypeKind;
+	for (const auto& hs : hir.structs) {
+		auto& info = structRegistry.at(hs.name);
 
-		for (const auto& member : sd->members) {
-			if (member.kind != StructMember::METHOD)
-				continue;
-			const auto& fn = *member.method;
-			std::string mangledName = sd->name + "." + fn.name;
+		for (const auto& fn : hs.methods) {
+			std::string mangledName = hs.name + "." + fn.name;
 
-			// Build parameter types: first is pointer to struct (this), then regular params.
 			std::vector<llvm::Type*> paramTypes;
 			auto* ptrType = llvm::PointerType::getUnqual(*context);
-			paramTypes.push_back(ptrType);	// this pointer
+			paramTypes.push_back(ptrType);  // this pointer
 
 			for (const auto& param : fn.params) {
-				paramTypes.push_back(getLLVMType(*param.type));
+				paramTypes.push_back(getLLVMType(param.type));
 			}
 
-			llvm::Type* retType = getLLVMType(*fn.returnType);
+			llvm::Type* retType = getLLVMType(fn.returnType);
 			auto funcType = llvm::FunctionType::get(retType, paramTypes, false);
 
-			// Reuse the pre-declared function if it exists (from registerStructTypes);
-			// otherwise create it now.
 			llvm::Function* function = module->getFunction(mangledName);
 			if (!function) {
 				function =
@@ -742,27 +758,17 @@ void CodeGen::generateStructMethods(const Program& program) {
 			// Store 'this' pointer in an alloca.
 			auto thisAlloca = createEntryBlockAlloca(function, "this", ptrType);
 			builder->CreateStore(&*function->arg_begin(), thisAlloca);
-			declareVariable("this", thisAlloca, ptrType, sd->name);
+			declareVariable("this", thisAlloca, ptrType, hs.name);
 
 			// Store regular parameters.
 			argIt = function->arg_begin();
 			++argIt;  // skip 'this'
 			for (size_t i = 0; i < fn.params.size(); i++, ++argIt) {
-				llvm::Type* paramType = getLLVMType(*fn.params[i].type);
+				llvm::Type* paramType = getLLVMType(fn.params[i].type);
 				auto alloca = createEntryBlockAlloca(function, fn.params[i].name, paramType);
 				builder->CreateStore(&*argIt, alloca);
-				// Build the full BF type name (including type params for array<T> / map<K,V>).
-				const auto& pTypeNode = *fn.params[i].type;
-				std::string fullPBFType = pTypeNode.name;
-				if (pTypeNode.name == "array" && !pTypeNode.typeParams.empty()) {
-					fullPBFType = "array<" + pTypeNode.typeParams[0]->name + ">";
-				} else if (pTypeNode.name == "map" && pTypeNode.typeParams.size() >= 2) {
-					fullPBFType = "map<" + pTypeNode.typeParams[0]->name + ","
-						+ pTypeNode.typeParams[1]->name + ">";
-				}
-				// For array/map params: register BF type name for indexing/length but do NOT
-				// add to heapOwned — the caller owns the collection; we don't inc/dec refcount.
-				if (fullPBFType.substr(0, 6) == "array<" || fullPBFType.substr(0, 4) == "map<") {
+				std::string fullPBFType = bfTypeToString(fn.params[i].type);
+				if (fn.params[i].type.kind == BFTypeKind::Array || fn.params[i].type.kind == BFTypeKind::Map) {
 					scopes.back().variables[fn.params[i].name]  = alloca;
 					scopes.back().varTypes[fn.params[i].name]   = paramType;
 					scopes.back().varBFTypeNames[fn.params[i].name] = fullPBFType;
@@ -798,7 +804,7 @@ void CodeGen::generateStructMethods(const Program& program) {
 					}
 				}
 			}
-			for (const auto& stmt : fn.body.statements) {
+			for (const auto& stmt : fn.body.stmts) {
 				generateStatement(*stmt);
 				if (builder->GetInsertBlock()->getTerminator())
 					break;
@@ -817,7 +823,7 @@ void CodeGen::generateStructMethods(const Program& program) {
 	}
 }
 
-void CodeGen::generateStructInit(const StructInitExpr& expr, llvm::Value* basePtr, const std::string& structName) {
+void CodeGen::generateStructInit(const bytefrost::HIRStructInit& expr, llvm::Value* basePtr, const std::string& structName) {
 	auto& info = structRegistry.at(structName);
 
 	for (const auto& [fieldName, fieldExpr] : expr.fields) {
@@ -829,10 +835,9 @@ void CodeGen::generateStructInit(const StructInitExpr& expr, llvm::Value* basePt
 		auto* fieldPtr = builder->CreateStructGEP(info.llvmType, basePtr, idx, fieldName + ".ptr");
 
 		// Handle nested struct init: center: { x: 10, y: 20 }
-		if (auto* nestedInit = dynamic_cast<const StructInitExpr*>(fieldExpr.get())) {
+		if (auto* nestedInit = dynamic_cast<const bytefrost::HIRStructInit*>(fieldExpr.get())) {
 			auto fldBFIt2 = info.fieldBFTypeNames.find(fieldName);
 			if (fldBFIt2 != info.fieldBFTypeNames.end() && structRegistry.count(fldBFIt2->second)) {
-				// Struct field stored as pointer: malloc, init, store pointer.
 				std::string nSName = fldBFIt2->second;
 				auto& nInfo = structRegistry.at(nSName);
 				auto* i64_ = llvm::Type::getInt64Ty(*context);
@@ -847,8 +852,7 @@ void CodeGen::generateStructInit(const StructInitExpr& expr, llvm::Value* basePt
 		}
 
 		// Handle unqualified enum variant name in struct initializer context.
-		// e.g.  rank: ACE  where rank is of type CardRanks.
-		if (auto* ident = dynamic_cast<const IdentifierExpr*>(fieldExpr.get())) {
+		if (auto* ident = dynamic_cast<const bytefrost::HIRVar*>(fieldExpr.get())) {
 			auto fieldBFIt = info.fieldBFTypeNames.find(fieldName);
 			if (fieldBFIt != info.fieldBFTypeNames.end()) {
 				auto enumIt = enumRegistry.find(fieldBFIt->second);
@@ -860,44 +864,29 @@ void CodeGen::generateStructInit(const StructInitExpr& expr, llvm::Value* basePt
 						builder->CreateStore(val, fieldPtr);
 						continue;
 					}
-					// Identifier not found as a variant – fall through to normal evaluation which will
-					// give a meaningful error.
 				}
 			}
 		}
 
 		llvm::Value* val = generateExpression(*fieldExpr);
-		// Type safety: reject int values for enum-typed fields.
-		{
-			auto fieldBFIt = info.fieldBFTypeNames.find(fieldName);
-			if (fieldBFIt != info.fieldBFTypeNames.end() && enumRegistry.count(fieldBFIt->second)) {
-				if (val->getType()->isIntegerTy(64)) {
-					throw CodeGenError(
-						"Type error: cannot assign integer value to enum field '" + fieldName +
-						"' of type '" + fieldBFIt->second + "'. Use an explicit enum variant.");
-				}
-			}
-		}
 		builder->CreateStore(val, fieldPtr);
 	}
 }
 
-std::pair<llvm::Value*, std::string> CodeGen::resolveStructBase(const Expression& expr) {
-	if (auto* ident = dynamic_cast<const IdentifierExpr*>(&expr)) {
+std::pair<llvm::Value*, std::string> CodeGen::resolveStructBase(const bytefrost::HIRExpr& expr) {
+	if (auto* ident = dynamic_cast<const bytefrost::HIRVar*>(&expr)) {
 		std::string structName = lookupVarBFTypeName(ident->name);
 		llvm::Type* varType = lookupVarType(ident->name);
-		// Struct variables are always ptrType allocas — load the pointer.
 		llvm::Value* basePtr = builder->CreateLoad(varType, lookupVariable(ident->name), ident->name + ".ptr");
 		return {basePtr, structName};
 	}
-	if (dynamic_cast<const ThisExpr*>(&expr)) {
+	if (dynamic_cast<const bytefrost::HIRThis*>(&expr)) {
 		std::string structName = lookupVarBFTypeName("this");
 		llvm::Type* thisType = lookupVarType("this");
 		llvm::Value* basePtr = builder->CreateLoad(thisType, lookupVariable("this"), "this.ptr");
 		return {basePtr, structName};
 	}
-	if (auto* member = dynamic_cast<const MemberAccessExpr*>(&expr)) {
-		// Chained access: resolve parent, GEP to intermediate field
+	if (auto* member = dynamic_cast<const bytefrost::HIRMemberAccess*>(&expr)) {
 		auto [parentPtr, parentStructName] = resolveStructBase(*member->object);
 		auto& parentInfo = structRegistry.at(parentStructName);
 		auto fieldIt = parentInfo.fieldIndices.find(member->member);
@@ -907,8 +896,6 @@ std::pair<llvm::Value*, std::string> CodeGen::resolveStructBase(const Expression
 		size_t idx = fieldIt->second;
 		auto* fieldGEP = builder->CreateStructGEP(parentInfo.llvmType, parentPtr, idx, member->member + ".gep");
 
-		// If the field is a user-defined struct (stored as pointer), load the pointer.
-		// Arrays and primitives are stored inline — return the GEP directly.
 		auto fldBFIt = parentInfo.fieldBFTypeNames.find(member->member);
 		if (fldBFIt != parentInfo.fieldBFTypeNames.end() && structRegistry.count(fldBFIt->second)) {
 			auto* structPtr = builder->CreateLoad(
@@ -918,14 +905,11 @@ std::pair<llvm::Value*, std::string> CodeGen::resolveStructBase(const Expression
 		std::string fieldBFName = (fldBFIt != parentInfo.fieldBFTypeNames.end()) ? fldBFIt->second : "";
 		return {fieldGEP, fieldBFName};
 	}
-	// IndexExpr: arr[i] or this.field[i] where element is a struct type.
-	if (auto* indexExpr = dynamic_cast<const IndexExpr*>(&expr)) {
-		std::string arrBFType = getExprBFType(*indexExpr->object);
-		if (arrBFType.size() > 6 && arrBFType.substr(0, 6) == "array<") {
-			std::string elemBFType = arrBFType.substr(6, arrBFType.size() - 7);
-			if (structRegistry.count(elemBFType)) {
-				return {generateIndex(*indexExpr), elemBFType};
-			}
+	// IndexExpr: arr[i] — use HIR element type directly.
+	if (auto* indexExpr = dynamic_cast<const bytefrost::HIRIndexExpr*>(&expr)) {
+		std::string elemBFName = bfTypeToString(indexExpr->type);
+		if (structRegistry.count(elemBFName)) {
+			return {generateIndex(*indexExpr), elemBFName};
 		}
 	}
 	throw CodeGenError("Cannot resolve struct base for expression");
@@ -935,58 +919,15 @@ std::pair<llvm::Value*, std::string> CodeGen::resolveStructBase(const Expression
 // Enum support
 // ==========================
 
-void CodeGen::registerEnumTypes(const Program& program) {
-	for (const auto& enumDecl : program.enums) {
+void CodeGen::registerEnumTypes(const bytefrost::HIRProgram& hir) {
+	for (const auto& ed : hir.enums) {
 		EnumInfo info;
-		for (const auto& variant : enumDecl->variants) {
-			info.variants[variant.name] = variant.value;
-			info.variantNames.push_back(variant.name);
+		for (const auto& v : ed.variants) {
+			info.variants[v.name] = v.value;
+			info.variantNames.push_back(v.name);
 		}
-		enumRegistry[enumDecl->name] = std::move(info);
+		enumRegistry[ed.name] = std::move(info);
 	}
-}
-
-std::string CodeGen::getExprBFType(const Expression& expr) {
-	if (auto* id = dynamic_cast<const IdentifierExpr*>(&expr)) {
-		for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
-			auto found = it->varBFTypeNames.find(id->name);
-			if (found != it->varBFTypeNames.end())
-				return found->second;
-		}
-		return "";
-	}
-	if (dynamic_cast<const ThisExpr*>(&expr)) {
-		return lookupVarBFTypeName("this");
-	}
-	if (auto* ma = dynamic_cast<const MemberAccessExpr*>(&expr)) {
-		// Case 1: EnumType.VARIANT — object is an identifier naming an enum
-		if (auto* id = dynamic_cast<const IdentifierExpr*>(ma->object.get())) {
-			if (enumRegistry.count(id->name)) {
-				return id->name;  // The BF type of CardRanks.ACE is "CardRanks"
-			}
-		}
-		// Case 2: struct field access — look up the field's BF type
-		std::string parentBFType = getExprBFType(*ma->object);
-		if (!parentBFType.empty()) {
-			auto structIt = structRegistry.find(parentBFType);
-			if (structIt != structRegistry.end()) {
-				auto& info = structIt->second;
-				auto fieldIt = info.fieldBFTypeNames.find(ma->member);
-				if (fieldIt != info.fieldBFTypeNames.end()) {
-					return fieldIt->second;
-				}
-			}
-		}
-		return "";
-	}
-	// IndexExpr: arr[i] or this.field[i] — return element BF type.
-	if (auto* ie = dynamic_cast<const IndexExpr*>(&expr)) {
-		std::string objBFType = getExprBFType(*ie->object);
-		if (objBFType.size() > 6 && objBFType.substr(0, 6) == "array<")
-			return objBFType.substr(6, objBFType.size() - 7);
-		return "";
-	}
-	return "";
 }
 
 llvm::Value* CodeGen::generateEnumToString(llvm::Value* enumVal, const std::string& enumTypeName) {
@@ -1039,7 +980,7 @@ llvm::StructType* CodeGen::getOrCreateArrayType(llvm::Type* elemType) {
 	return llvm::StructType::get(*context, {ptrType, i64, i64, ptrType});
 }
 
-llvm::Value* CodeGen::generateArrayLiteral(const ArrayLiteralExpr& expr, llvm::Type* elemType) {
+llvm::Value* CodeGen::generateArrayLiteral(const bytefrost::HIRArrayLit& expr, llvm::Type* elemType) {
 	auto* fn = builder->GetInsertBlock()->getParent();
 	auto* arrType = getOrCreateArrayType(elemType);
 	auto* i64 = llvm::Type::getInt64Ty(*context);
@@ -1365,14 +1306,14 @@ CodeGen::generateMapGet(llvm::AllocaInst* mapAlloca, llvm::Type* keyType, llvm::
 // Function generation
 // ==========================
 
-void CodeGen::generateFunction(const FunctionDecl& fn) {
+void CodeGen::generateFunction(const bytefrost::HIRFunction& fn) {
 	// Build the parameter types.
 	std::vector<llvm::Type*> paramTypes;
 	for (const auto& param : fn.params) {
-		paramTypes.push_back(getLLVMType(*param.type));
+		paramTypes.push_back(getLLVMType(param.type));
 	}
 
-	llvm::Type* retType = getLLVMType(*fn.returnType);
+	llvm::Type* retType = getLLVMType(fn.returnType);
 	auto funcType = llvm::FunctionType::get(retType, paramTypes, false);
 
 	llvm::Function* function = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, fn.name, module.get());
@@ -1396,9 +1337,7 @@ void CodeGen::generateFunction(const FunctionDecl& fn) {
 		llvm::Type* paramType = paramTypes[idx];
 		auto alloca = createEntryBlockAlloca(function, fn.params[idx].name, paramType);
 		builder->CreateStore(&arg, alloca);
-		// Preserve the BF type name for enum and struct-typed parameters so that
-		// getExprBFType() can identify them (e.g. for type-safe enum comparison).
-		const std::string& paramTypeName = fn.params[idx].type->name;
+		const std::string paramTypeName = bfTypeToString(fn.params[idx].type);
 		if (enumRegistry.count(paramTypeName) || structRegistry.count(paramTypeName)) {
 			declareVariable(fn.params[idx].name, alloca, paramType, paramTypeName);
 		} else {
@@ -1408,21 +1347,18 @@ void CodeGen::generateFunction(const FunctionDecl& fn) {
 	}
 
 	// Generate the function body.
-	for (const auto& stmt : fn.body.statements) {
+	for (const auto& stmt : fn.body.stmts) {
 		generateStatement(*stmt);
-		// If the current block is already terminated (return/break/continue), stop.
 		if (builder->GetInsertBlock()->getTerminator())
 			break;
 	}
 
 	// If the function is void and doesn't end with a return, add one.
 	if (!builder->GetInsertBlock()->getTerminator()) {
-		// Emit refcount cleanup before the implicit return.
 		emitScopeCleanup();
 		if (retType->isVoidTy()) {
 			builder->CreateRetVoid();
 		} else {
-			// Default: return 0 for int, 0.0 for float, etc.
 			builder->CreateRet(llvm::Constant::getNullValue(retType));
 		}
 	}
@@ -1434,34 +1370,34 @@ void CodeGen::generateFunction(const FunctionDecl& fn) {
 // Statement dispatch
 // ==========================
 
-void CodeGen::generateStatement(const Statement& stmt) {
-	if (auto* s = dynamic_cast<const VarDeclStmt*>(&stmt)) {
+void CodeGen::generateStatement(const bytefrost::HIRStmt& stmt) {
+	using namespace bytefrost;
+	if (auto* s = dynamic_cast<const HIRVarDecl*>(&stmt)) {
 		generateVarDecl(*s);
-	} else if (auto* s = dynamic_cast<const AssignStmt*>(&stmt)) {
+	} else if (auto* s = dynamic_cast<const HIRAssign*>(&stmt)) {
 		generateAssign(*s);
-	} else if (auto* s = dynamic_cast<const IfStmt*>(&stmt)) {
+	} else if (auto* s = dynamic_cast<const HIRIf*>(&stmt)) {
 		generateIf(*s);
-	} else if (auto* s = dynamic_cast<const WhileStmt*>(&stmt)) {
+	} else if (auto* s = dynamic_cast<const HIRWhile*>(&stmt)) {
 		generateWhile(*s);
-	} else if (auto* s = dynamic_cast<const ForStmt*>(&stmt)) {
+	} else if (auto* s = dynamic_cast<const HIRFor*>(&stmt)) {
 		generateFor(*s);
-	} else if (auto* s = dynamic_cast<const ForInStmt*>(&stmt)) {
+	} else if (auto* s = dynamic_cast<const HIRForIn*>(&stmt)) {
 		generateForIn(*s);
-	} else if (auto* s = dynamic_cast<const MatchStmt*>(&stmt)) {
+	} else if (auto* s = dynamic_cast<const HIRMatch*>(&stmt)) {
 		generateMatch(*s);
-	} else if (auto* s = dynamic_cast<const ReturnStmt*>(&stmt)) {
+	} else if (auto* s = dynamic_cast<const HIRReturn*>(&stmt)) {
 		generateReturn(*s);
-	} else if (auto* s = dynamic_cast<const ExprStmt*>(&stmt)) {
+	} else if (auto* s = dynamic_cast<const HIRExprStmt*>(&stmt)) {
 		generateExprStmt(*s);
-	} else if (dynamic_cast<const BreakStmt*>(&stmt)) {
+	} else if (dynamic_cast<const HIRBreak*>(&stmt)) {
 		if (breakTargets.empty())
 			throw CodeGenError("break outside of loop");
 		builder->CreateBr(breakTargets.back());
-		// Create an unreachable block for any code after break.
 		auto* fn = builder->GetInsertBlock()->getParent();
 		auto* deadBB = llvm::BasicBlock::Create(*context, "after.break", fn);
 		builder->SetInsertPoint(deadBB);
-	} else if (dynamic_cast<const ContinueStmt*>(&stmt)) {
+	} else if (dynamic_cast<const HIRContinue*>(&stmt)) {
 		if (continueTargets.empty())
 			throw CodeGenError("continue outside of loop");
 		builder->CreateBr(continueTargets.back());
@@ -1477,76 +1413,25 @@ void CodeGen::generateStatement(const Statement& stmt) {
 // Variable declaration
 // ==========================
 
-void CodeGen::generateVarDecl(const VarDeclStmt& stmt) {
+void CodeGen::generateVarDecl(const bytefrost::HIRVarDecl& stmt) {
+	using bytefrost::BFTypeKind;
 	auto* fn = builder->GetInsertBlock()->getParent();
-	llvm::Type* varType = nullptr;
-	std::string bfTypeName;
 
-	if (stmt.type) {
-		varType = getLLVMType(*stmt.type);
-		bfTypeName = stmt.type->name;
+	std::string bfTypeName = bfTypeToString(stmt.bfType);
+	llvm::Type* varType = getLLVMType(stmt.bfType);
 
-		// Handle array<T> type params
-		if (bfTypeName == "array" && stmt.type->typeParams.size() == 1) {
-			bfTypeName = "array<" + stmt.type->typeParams[0]->name + ">";
-		}
-		// Handle map<K,V> type params
-		if (bfTypeName == "map" && stmt.type->typeParams.size() == 2) {
-			bfTypeName = "map<" + stmt.type->typeParams[0]->name + "," + stmt.type->typeParams[1]->name + ">";
-		}
-	} else if (stmt.isWalrus && stmt.initializer) {
-		// Special case walrus + input(): always string.
-		if (auto* callExpr = dynamic_cast<const CallExpr*>(stmt.initializer.get())) {
-			if (auto* callId = dynamic_cast<const IdentifierExpr*>(callExpr->callee.get())) {
-				if (callId->name == "input") {
-					auto* ptrType = llvm::PointerType::getUnqual(*context);
-					auto alloca = createEntryBlockAlloca(fn, stmt.name, ptrType);
-					llvm::Value* inputVal = generateInputCall(callExpr->arguments, "string");
-					builder->CreateStore(inputVal, alloca);
-					declareVariable(stmt.name, alloca, ptrType, "string");
-					return;
-				}
-			}
-		}
-		// Infer type from initializer.
-		llvm::Value* initVal = generateExpression(*stmt.initializer);
+	// When bfType is Unknown (e.g. walrus-assign from member access or other
+	// HIR nodes that don't propagate type), infer the LLVM type from the init
+	// value at codegen time.
+	if (stmt.bfType.isUnknown() && stmt.init
+		&& !structRegistry.count(bfTypeName)
+		&& !enumRegistry.count(bfTypeName)) {
+		llvm::Value* initVal = generateExpression(*stmt.init);
 		varType = initVal->getType();
 		auto alloca = createEntryBlockAlloca(fn, stmt.name, varType);
 		builder->CreateStore(initVal, alloca);
-		// If the result is a struct pointer (from a constructor call), track its BF type name.
-		if (varType->isPointerTy()) {
-			if (auto* callExpr = dynamic_cast<const CallExpr*>(stmt.initializer.get())) {
-				if (auto* ident = dynamic_cast<const IdentifierExpr*>(callExpr->callee.get())) {
-					if (structRegistry.count(ident->name)) {
-						declareVariable(stmt.name, alloca, varType, ident->name);
-						return;
-					}
-				}
-			}
-		}
-		// If the inferred type is a registered struct (value type path), track its BF type name.
-		if (varType->isStructTy()) {
-			auto* st = llvm::cast<llvm::StructType>(varType);
-			if (st->hasName()) {
-				std::string name = st->getName().str();
-				if (structRegistry.count(name)) {
-					declareVariable(stmt.name, alloca, varType, name);
-					return;
-				}
-			}
-		}
-		// If the initializer is an enum expression, track its enum type name.
-		{
-			std::string initBFType = getExprBFType(*stmt.initializer);
-			if (!initBFType.empty() && enumRegistry.count(initBFType)) {
-				declareVariable(stmt.name, alloca, varType, initBFType);
-				return;
-			}
-		}
-		declareVariable(stmt.name, alloca, varType);
+		declareVariable(stmt.name, alloca, varType, bfTypeName);
 		return;
-	} else {
-		throw CodeGenError("Cannot infer type for variable: " + stmt.name);
 	}
 
 	// Check for user-defined struct type: always a heap pointer (reference semantics).
@@ -1554,9 +1439,8 @@ void CodeGen::generateVarDecl(const VarDeclStmt& stmt) {
 		auto& structInfo = structRegistry.at(bfTypeName);
 		auto* ptrType = llvm::PointerType::getUnqual(*context);
 		auto alloca = createEntryBlockAlloca(fn, stmt.name, ptrType);
-		if (stmt.initializer) {
-			if (auto* structInit = dynamic_cast<const StructInitExpr*>(stmt.initializer.get())) {
-				// Heap-allocate and initialize the struct.
+		if (stmt.init) {
+			if (auto* structInit = dynamic_cast<const bytefrost::HIRStructInit*>(stmt.init.get())) {
 				auto* i64 = llvm::Type::getInt64Ty(*context);
 				uint64_t structSize = module->getDataLayout().getTypeAllocSize(structInfo.llvmType);
 				llvm::Value* heapPtr =
@@ -1565,37 +1449,32 @@ void CodeGen::generateVarDecl(const VarDeclStmt& stmt) {
 				generateStructInit(*structInit, heapPtr, bfTypeName);
 				builder->CreateStore(heapPtr, alloca);
 			} else {
-				// Other initializer: constructor result, null literal, etc.
-				llvm::Value* initVal = generateExpression(*stmt.initializer);
+				llvm::Value* initVal = generateExpression(*stmt.init);
 				builder->CreateStore(initVal, alloca);
 			}
 		} else {
-			// No initializer: default to null pointer.
 			builder->CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ptrType)), alloca);
 		}
 		declareVariable(stmt.name, alloca, ptrType, bfTypeName);
 		return;
 	}
+
 	if (varType->isStructTy()) {
-		// It's an array or map type (those are also LLVM struct types).
-		if (bfTypeName.substr(0, 6) == "array<") {
+		// Array type
+		if (stmt.bfType.kind == BFTypeKind::Array) {
 			auto alloca = createEntryBlockAlloca(fn, stmt.name, varType);
-			if (stmt.initializer) {
-				if (auto* arrLit = dynamic_cast<const ArrayLiteralExpr*>(stmt.initializer.get())) {
-					// Extract element type from the BF type.
-					llvm::Type* elemType = getLLVMType(*stmt.type->typeParams[0]);
-					// Generate the literal into a temporary alloca, then copy.
+			if (stmt.init) {
+				if (auto* arrLit = dynamic_cast<const bytefrost::HIRArrayLit*>(stmt.init.get())) {
+					llvm::Type* elemType = getLLVMType(*stmt.bfType.elemType);
 					auto* tmpAlloca = static_cast<llvm::AllocaInst*>(generateArrayLiteral(*arrLit, elemType));
-					// Copy the struct fields.
 					llvm::Value* tmpVal = builder->CreateLoad(varType, tmpAlloca, "arr.tmp");
 					builder->CreateStore(tmpVal, alloca);
 				} else {
-					llvm::Value* initVal = generateExpression(*stmt.initializer);
+					llvm::Value* initVal = generateExpression(*stmt.init);
 					builder->CreateStore(initVal, alloca);
 				}
 			} else {
-				// Empty array with initial capacity.
-				llvm::Type* elemType = getLLVMType(*stmt.type->typeParams[0]);
+				llvm::Type* elemType = getLLVMType(*stmt.bfType.elemType);
 				auto* tmpAlloca = static_cast<llvm::AllocaInst*>(generateEmptyArray(elemType));
 				llvm::Value* tmpVal = builder->CreateLoad(varType, tmpAlloca, "arr.tmp");
 				builder->CreateStore(tmpVal, alloca);
@@ -1604,11 +1483,11 @@ void CodeGen::generateVarDecl(const VarDeclStmt& stmt) {
 			return;
 		}
 
-		if (bfTypeName.substr(0, 4) == "map<") {
+		// Map type
+		if (stmt.bfType.kind == BFTypeKind::Map) {
 			auto alloca = createEntryBlockAlloca(fn, stmt.name, varType);
-			// Maps are always initialized empty.
-			llvm::Type* keyType = getLLVMType(*stmt.type->typeParams[0]);
-			llvm::Type* valType2 = getLLVMType(*stmt.type->typeParams[1]);
+			llvm::Type* keyType = getLLVMType(*stmt.bfType.keyType);
+			llvm::Type* valType2 = getLLVMType(*stmt.bfType.valueType);
 			auto* tmpAlloca = static_cast<llvm::AllocaInst*>(generateEmptyMap(keyType, valType2));
 			llvm::Value* tmpVal = builder->CreateLoad(varType, tmpAlloca, "map.tmp");
 			builder->CreateStore(tmpVal, alloca);
@@ -1617,34 +1496,35 @@ void CodeGen::generateVarDecl(const VarDeclStmt& stmt) {
 		}
 	}
 
+	if (stmt.init && dynamic_cast<const bytefrost::HIRStructInit*>(stmt.init.get())
+		&& (bfTypeName.empty() || !structRegistry.count(bfTypeName))) {
+		throw CodeGenError(
+			"Struct init requires a resolvable struct type for variable '" + stmt.name
+			+ "' (bfType='" + bfTypeName + "')");
+	}
+
+	// Scalar / simple types.
 	auto alloca = createEntryBlockAlloca(fn, stmt.name, varType);
 
-	if (stmt.initializer) {
-		// Special case: input() call — generate type-aware reading.
-		if (auto* callExpr = dynamic_cast<const CallExpr*>(stmt.initializer.get())) {
-			if (auto* callId = dynamic_cast<const IdentifierExpr*>(callExpr->callee.get())) {
+	if (stmt.init) {
+		// Special case: input() call → generate type-aware reading.
+		if (auto* callExpr = dynamic_cast<const bytefrost::HIRCallExpr*>(stmt.init.get())) {
+			if (auto* callId = dynamic_cast<const bytefrost::HIRVar*>(callExpr->callee.get())) {
 				if (callId->name == "input") {
-					llvm::Value* inputVal = generateInputCall(callExpr->arguments, bfTypeName);
+					llvm::Value* inputVal = generateInputCall(callExpr->args, bfTypeName);
 					builder->CreateStore(inputVal, alloca);
 					declareVariable(stmt.name, alloca, varType, bfTypeName);
 					return;
 				}
 			}
 		}
-		llvm::Value* initVal = generateExpression(*stmt.initializer);
+		llvm::Value* initVal = generateExpression(*stmt.init);
 		// Implicit cast: if variable is float and init is int, cast.
 		if (isFloatType(varType) && initVal->getType()->isIntegerTy()) {
 			initVal = builder->CreateSIToFP(initVal, varType, "cast");
 		}
-		// Type safety: reject int→enum implicit conversion.
-		if (varType->isIntegerTy(32) && enumRegistry.count(bfTypeName) && initVal->getType()->isIntegerTy(64)) {
-			throw CodeGenError(
-				"Type error: cannot assign integer to enum type '" + bfTypeName +
-				"'. Use an explicit enum variant (e.g. " + bfTypeName + ".VARIANT).");
-		}
 		builder->CreateStore(initVal, alloca);
 	} else {
-		// Zero-initialize.
 		builder->CreateStore(llvm::Constant::getNullValue(varType), alloca);
 	}
 
@@ -1655,10 +1535,10 @@ void CodeGen::generateVarDecl(const VarDeclStmt& stmt) {
 // Assignment
 // ==========================
 
-void CodeGen::generateAssign(const AssignStmt& stmt) {
+void CodeGen::generateAssign(const bytefrost::HIRAssign& stmt) {
 	// Check for map index assignment: map[key] = val
-	if (auto* indexExpr = dynamic_cast<const IndexExpr*>(stmt.target.get())) {
-		if (auto* ident = dynamic_cast<const IdentifierExpr*>(indexExpr->object.get())) {
+	if (auto* indexExpr = dynamic_cast<const bytefrost::HIRIndexExpr*>(stmt.target.get())) {
+		if (auto* ident = dynamic_cast<const bytefrost::HIRVar*>(indexExpr->object.get())) {
 			std::string bfType = lookupVarBFTypeName(ident->name);
 			if (bfType.substr(0, 4) == "map<") {
 				// Extract K,V type names from bfType string.
@@ -1690,11 +1570,11 @@ void CodeGen::generateAssign(const AssignStmt& stmt) {
 
 	llvm::Type* ptrElemType = nullptr;
 	// Get the type from the lvalue.
-	if (auto* ident = dynamic_cast<const IdentifierExpr*>(stmt.target.get())) {
+	if (auto* ident = dynamic_cast<const bytefrost::HIRVar*>(stmt.target.get())) {
 		ptrElemType = lookupVarType(ident->name);
-	} else if (auto* indexExpr = dynamic_cast<const IndexExpr*>(stmt.target.get())) {
+	} else if (auto* indexExpr = dynamic_cast<const bytefrost::HIRIndexExpr*>(stmt.target.get())) {
 		// For array index assignment, the element type comes from the array's BF type.
-		if (auto* ident = dynamic_cast<const IdentifierExpr*>(indexExpr->object.get())) {
+		if (auto* ident = dynamic_cast<const bytefrost::HIRVar*>(indexExpr->object.get())) {
 			std::string bfType = lookupVarBFTypeName(ident->name);
 			if (bfType.substr(0, 6) == "array<") {
 				std::string elemTypeName = bfType.substr(6, bfType.size() - 7);
@@ -1704,7 +1584,7 @@ void CodeGen::generateAssign(const AssignStmt& stmt) {
 		}
 		// Chained: this.field[i] or obj.field[i]
 		if (!ptrElemType) {
-			if (auto* ma = dynamic_cast<const MemberAccessExpr*>(indexExpr->object.get())) {
+			if (auto* ma = dynamic_cast<const bytefrost::HIRMemberAccess*>(indexExpr->object.get())) {
 				auto [basePtr, baseBFType] = resolveStructBase(*ma->object);
 				auto baseStructIt = structRegistry.find(baseBFType);
 				if (baseStructIt != structRegistry.end()) {
@@ -1726,17 +1606,6 @@ void CodeGen::generateAssign(const AssignStmt& stmt) {
 	}
 
 	if (stmt.op == "=") {
-		// Type safety: reject int→enum implicit assignment.
-		if (rhs->getType()->isIntegerTy(64) && ptrElemType && ptrElemType->isIntegerTy(32)) {
-			if (auto* ident = dynamic_cast<const IdentifierExpr*>(stmt.target.get())) {
-				if (enumRegistry.count(lookupVarBFTypeName(ident->name))) {
-					throw CodeGenError(
-						"Type error: cannot assign integer to enum variable '" + ident->name +
-						"' of type '" + lookupVarBFTypeName(ident->name) +
-						"'. Use an explicit enum variant.");
-				}
-			}
-		}
 		builder->CreateStore(rhs, ptr);
 	} else {
 		// Compound assignment: load current value, compute, store.
@@ -1776,13 +1645,13 @@ void CodeGen::generateAssign(const AssignStmt& stmt) {
 // LValue generation (for assignment targets)
 // ==========================
 
-llvm::Value* CodeGen::generateLValue(const Expression& expr) {
-	if (auto* ident = dynamic_cast<const IdentifierExpr*>(&expr)) {
+llvm::Value* CodeGen::generateLValue(const bytefrost::HIRExpr& expr) {
+	if (auto* ident = dynamic_cast<const bytefrost::HIRVar*>(&expr)) {
 		return lookupVariable(ident->name);
 	}
 	// Index lvalue: arr[i]
-	if (auto* indexExpr = dynamic_cast<const IndexExpr*>(&expr)) {
-		if (auto* ident = dynamic_cast<const IdentifierExpr*>(indexExpr->object.get())) {
+	if (auto* indexExpr = dynamic_cast<const bytefrost::HIRIndexExpr*>(&expr)) {
+		if (auto* ident = dynamic_cast<const bytefrost::HIRVar*>(indexExpr->object.get())) {
 			std::string bfType = lookupVarBFTypeName(ident->name);
 			if (bfType.substr(0, 6) == "array<") {
 				std::string elemTypeName = bfType.substr(6, bfType.size() - 7);
@@ -1799,7 +1668,7 @@ llvm::Value* CodeGen::generateLValue(const Expression& expr) {
 			}
 		}
 		// Chained: this.field[i] or obj.field[i]
-		if (auto* ma = dynamic_cast<const MemberAccessExpr*>(indexExpr->object.get())) {
+		if (auto* ma = dynamic_cast<const bytefrost::HIRMemberAccess*>(indexExpr->object.get())) {
 			auto [basePtr, baseBFType] = resolveStructBase(*ma->object);
 			auto baseStructIt = structRegistry.find(baseBFType);
 			if (baseStructIt != structRegistry.end()) {
@@ -1825,10 +1694,9 @@ llvm::Value* CodeGen::generateLValue(const Expression& expr) {
 			}
 		}
 	}
-	// Member access lvalue: obj.field (supports chained access)
-	if (auto* memberExpr = dynamic_cast<const MemberAccessExpr*>(&expr)) {
-		// Enum member access is never assignable.
-		if (auto* id = dynamic_cast<const IdentifierExpr*>(memberExpr->object.get())) {
+	// Member access lvalue: obj.field
+	if (auto* memberExpr = dynamic_cast<const bytefrost::HIRMemberAccess*>(&expr)) {
+		if (auto* id = dynamic_cast<const bytefrost::HIRVar*>(memberExpr->object.get())) {
 			if (enumRegistry.count(id->name)) {
 				throw CodeGenError(
 					"Cannot assign to enum variant '" + memberExpr->member + "' — enum variants are read-only");
@@ -1855,7 +1723,7 @@ llvm::Value* CodeGen::generateLValue(const Expression& expr) {
 // If statement
 // ==========================
 
-void CodeGen::generateIf(const IfStmt& stmt) {
+void CodeGen::generateIf(const bytefrost::HIRIf& stmt) {
 	auto* fn = builder->GetInsertBlock()->getParent();
 
 	llvm::Value* cond = generateExpression(*stmt.condition);
@@ -1872,7 +1740,7 @@ void CodeGen::generateIf(const IfStmt& stmt) {
 	std::vector<llvm::BasicBlock*> elseIfBodyBBs;
 	llvm::BasicBlock* elseBB = nullptr;
 
-	for (size_t i = 0; i < stmt.elseIfBlocks.size(); i++) {
+	for (size_t i = 0; i < stmt.elseIfs.size(); i++) {
 		auto* condBB = llvm::BasicBlock::Create(*context, "elseif.cond", fn, mergeBB);
 		auto* bodyBB = llvm::BasicBlock::Create(*context, "elseif.body", fn, mergeBB);
 		elseIfCondBBs.push_back(condBB);
@@ -1897,7 +1765,7 @@ void CodeGen::generateIf(const IfStmt& stmt) {
 
 	// Then block.
 	builder->SetInsertPoint(thenBB);
-	for (const auto& s : stmt.thenBlock.statements) {
+	for (const auto& s : stmt.thenBlock.stmts) {
 		generateStatement(*s);
 		if (builder->GetInsertBlock()->getTerminator())
 			break;
@@ -1907,9 +1775,9 @@ void CodeGen::generateIf(const IfStmt& stmt) {
 	}
 
 	// Else-if blocks.
-	for (size_t i = 0; i < stmt.elseIfBlocks.size(); i++) {
+	for (size_t i = 0; i < stmt.elseIfs.size(); i++) {
 		builder->SetInsertPoint(elseIfCondBBs[i]);
-		llvm::Value* eicond = generateExpression(*stmt.elseIfBlocks[i].first);
+		llvm::Value* eicond = generateExpression(*stmt.elseIfs[i].first);
 		if (!eicond->getType()->isIntegerTy(1)) {
 			eicond = builder->CreateICmpNE(eicond, llvm::Constant::getNullValue(eicond->getType()), "tobool");
 		}
@@ -1925,7 +1793,7 @@ void CodeGen::generateIf(const IfStmt& stmt) {
 		builder->CreateCondBr(eicond, elseIfBodyBBs[i], nextFalse);
 
 		builder->SetInsertPoint(elseIfBodyBBs[i]);
-		for (const auto& s : stmt.elseIfBlocks[i].second.statements) {
+		for (const auto& s : stmt.elseIfs[i].second.stmts) {
 			generateStatement(*s);
 			if (builder->GetInsertBlock()->getTerminator())
 				break;
@@ -1938,7 +1806,7 @@ void CodeGen::generateIf(const IfStmt& stmt) {
 	// Else block.
 	if (elseBB) {
 		builder->SetInsertPoint(elseBB);
-		for (const auto& s : stmt.elseBlock->statements) {
+		for (const auto& s : stmt.elseBlock->stmts) {
 			generateStatement(*s);
 			if (builder->GetInsertBlock()->getTerminator())
 				break;
@@ -1955,7 +1823,7 @@ void CodeGen::generateIf(const IfStmt& stmt) {
 // While loop
 // ==========================
 
-void CodeGen::generateWhile(const WhileStmt& stmt) {
+void CodeGen::generateWhile(const bytefrost::HIRWhile& stmt) {
 	auto* fn = builder->GetInsertBlock()->getParent();
 	auto* condBB = llvm::BasicBlock::Create(*context, "while.cond", fn);
 	auto* bodyBB = llvm::BasicBlock::Create(*context, "while.body", fn);
@@ -1976,7 +1844,7 @@ void CodeGen::generateWhile(const WhileStmt& stmt) {
 	continueTargets.push_back(condBB);
 
 	builder->SetInsertPoint(bodyBB);
-	for (const auto& s : stmt.body.statements) {
+	for (const auto& s : stmt.body.stmts) {
 		generateStatement(*s);
 		if (builder->GetInsertBlock()->getTerminator())
 			break;
@@ -1995,7 +1863,7 @@ void CodeGen::generateWhile(const WhileStmt& stmt) {
 // For loop (C-style)
 // ==========================
 
-void CodeGen::generateFor(const ForStmt& stmt) {
+void CodeGen::generateFor(const bytefrost::HIRFor& stmt) {
 	auto* fn = builder->GetInsertBlock()->getParent();
 
 	pushScope();
@@ -2029,7 +1897,7 @@ void CodeGen::generateFor(const ForStmt& stmt) {
 	continueTargets.push_back(updateBB);
 
 	builder->SetInsertPoint(bodyBB);
-	for (const auto& s : stmt.body.statements) {
+	for (const auto& s : stmt.body.stmts) {
 		generateStatement(*s);
 		if (builder->GetInsertBlock()->getTerminator())
 			break;
@@ -2057,38 +1925,60 @@ void CodeGen::generateFor(const ForStmt& stmt) {
 // For-in loop (range-based)
 // ==========================
 
-void CodeGen::generateForIn(const ForInStmt& stmt) {
+void CodeGen::generateForIn(const bytefrost::HIRForIn& stmt) {
 	auto* fn = builder->GetInsertBlock()->getParent();
+	llvm::Type* i64 = llvm::Type::getInt64Ty(*context);
 
+	// Resolve the array alloca and its LLVM struct type.
+	// The range expression must be an HIRVar naming an array variable.
+	auto* rangeVar = dynamic_cast<const bytefrost::HIRVar*>(stmt.range.get());
+	if (!rangeVar) {
+		throw CodeGenError("for-in range must be an array variable");
+	}
+	llvm::AllocaInst* arrAlloca = lookupVariable(rangeVar->name);
+	llvm::Type* arrType = lookupVarType(rangeVar->name);
+	llvm::Type* elemType = getLLVMType(stmt.varType);
+
+	// Array struct layout: { elem_ptr*, i64 length, i64 capacity, i64* refcount }
+	// Load length (field index 1).
+	auto* lenPtr = builder->CreateStructGEP(arrType, arrAlloca, 1, "forin.len.ptr");
+	llvm::Value* arrLen = builder->CreateLoad(i64, lenPtr, "forin.len");
+
+	// Index counter alloca (starts at 0).
+	auto* idxAlloca = createEntryBlockAlloca(fn, "forin.idx", i64);
+	builder->CreateStore(llvm::ConstantInt::get(i64, 0), idxAlloca);
+
+	// Loop variable alloca (holds current element each iteration).
 	pushScope();
+	auto* elemAlloca = createEntryBlockAlloca(fn, stmt.varName, elemType);
+	declareVariable(stmt.varName, elemAlloca, elemType);
 
-	llvm::Type* varType = getLLVMType(*stmt.varType);
-	auto alloca = createEntryBlockAlloca(fn, stmt.varName, varType);
-	llvm::Value* startVal = generateExpression(*stmt.rangeStart);
-	builder->CreateStore(startVal, alloca);
-	declareVariable(stmt.varName, alloca, varType);
-
-	llvm::Value* endVal = generateExpression(*stmt.rangeEnd);
-
-	auto* condBB = llvm::BasicBlock::Create(*context, "forin.cond", fn);
-	auto* bodyBB = llvm::BasicBlock::Create(*context, "forin.body", fn);
+	auto* condBB   = llvm::BasicBlock::Create(*context, "forin.cond",   fn);
+	auto* bodyBB   = llvm::BasicBlock::Create(*context, "forin.body",   fn);
 	auto* updateBB = llvm::BasicBlock::Create(*context, "forin.update", fn);
-	auto* endBB = llvm::BasicBlock::Create(*context, "forin.end", fn);
+	auto* endBB    = llvm::BasicBlock::Create(*context, "forin.end",    fn);
 
 	builder->CreateBr(condBB);
 
-	// Condition: i < end.
+	// Condition: idx < arrLen
 	builder->SetInsertPoint(condBB);
-	llvm::Value* curVal = builder->CreateLoad(varType, alloca, stmt.varName);
-	llvm::Value* cond = builder->CreateICmpSLT(curVal, endVal, "forin.cmp");
+	llvm::Value* idx = builder->CreateLoad(i64, idxAlloca, "forin.idx");
+	llvm::Value* cond = builder->CreateICmpSLT(idx, arrLen, "forin.cond");
 	builder->CreateCondBr(cond, bodyBB, endBB);
 
-	// Body.
+	// Body: load data[idx] into the loop variable, then run statements.
 	breakTargets.push_back(endBB);
 	continueTargets.push_back(updateBB);
 
 	builder->SetInsertPoint(bodyBB);
-	for (const auto& s : stmt.body.statements) {
+	auto* dataPtr = builder->CreateStructGEP(arrType, arrAlloca, 0, "forin.data.ptr");
+	llvm::Value* data = builder->CreateLoad(llvm::PointerType::getUnqual(*context), dataPtr, "forin.data");
+	llvm::Value* idxBody = builder->CreateLoad(i64, idxAlloca, "forin.idx.body");
+	llvm::Value* elemPtr = builder->CreateGEP(elemType, data, idxBody, "forin.elem.ptr");
+	llvm::Value* elemVal = builder->CreateLoad(elemType, elemPtr, "forin.elem");
+	builder->CreateStore(elemVal, elemAlloca);
+
+	for (const auto& s : stmt.body.stmts) {
 		generateStatement(*s);
 		if (builder->GetInsertBlock()->getTerminator())
 			break;
@@ -2100,11 +1990,11 @@ void CodeGen::generateForIn(const ForInStmt& stmt) {
 	breakTargets.pop_back();
 	continueTargets.pop_back();
 
-	// Update: i++.
+	// Update: idx++
 	builder->SetInsertPoint(updateBB);
-	llvm::Value* cur = builder->CreateLoad(varType, alloca, stmt.varName);
-	llvm::Value* next = builder->CreateAdd(cur, llvm::ConstantInt::get(varType, 1), "forin.inc");
-	builder->CreateStore(next, alloca);
+	llvm::Value* idxUpd = builder->CreateLoad(i64, idxAlloca, "forin.idx.upd");
+	llvm::Value* idxNext = builder->CreateAdd(idxUpd, llvm::ConstantInt::get(i64, 1), "forin.idx.next");
+	builder->CreateStore(idxNext, idxAlloca);
 	builder->CreateBr(condBB);
 
 	popScope();
@@ -2116,7 +2006,7 @@ void CodeGen::generateForIn(const ForInStmt& stmt) {
 // Match statement
 // ==========================
 
-void CodeGen::generateMatch(const MatchStmt& stmt) {
+void CodeGen::generateMatch(const bytefrost::HIRMatch& stmt) {
 	auto* fn = builder->GetInsertBlock()->getParent();
 	llvm::Value* subject = generateExpression(*stmt.subject);
 	bool isString = isStringType(subject->getType());
@@ -2126,7 +2016,7 @@ void CodeGen::generateMatch(const MatchStmt& stmt) {
 	// For each case, create a condition check and body block.
 	struct CaseInfo {
 		llvm::BasicBlock* bodyBB;
-		const MatchCase* mc;
+		const bytefrost::HIRMatchCase* mc;
 	};
 	std::vector<CaseInfo> cases;
 	llvm::BasicBlock* defaultBB = nullptr;
@@ -2196,7 +2086,7 @@ void CodeGen::generateMatch(const MatchStmt& stmt) {
 	// Generate case bodies.
 	for (auto& c : cases) {
 		builder->SetInsertPoint(c.bodyBB);
-		for (const auto& s : c.mc->body.statements) {
+		for (const auto& s : c.mc->body.stmts) {
 			generateStatement(*s);
 			if (builder->GetInsertBlock()->getTerminator())
 				break;
@@ -2213,7 +2103,7 @@ void CodeGen::generateMatch(const MatchStmt& stmt) {
 // Return
 // ==========================
 
-void CodeGen::generateReturn(const ReturnStmt& stmt) {
+void CodeGen::generateReturn(const bytefrost::HIRReturn& stmt) {
 	if (stmt.value) {
 		llvm::Value* val = generateExpression(*stmt.value);
 		// Implicit cast: if the function returns float and the value is int, upcast.
@@ -2221,12 +2111,6 @@ void CodeGen::generateReturn(const ReturnStmt& stmt) {
 		llvm::Type* retType = fn->getReturnType();
 		if (isFloatType(retType) && val->getType()->isIntegerTy()) {
 			val = builder->CreateSIToFP(val, retType, "ret.cast");
-		}
-		// Type safety: reject int return value for enum return type.
-		if (retType->isIntegerTy(32) && val->getType()->isIntegerTy(64)) {
-			throw CodeGenError(
-				"Type error: cannot return integer value from function with enum return type. "
-				"Use an explicit enum variant.");
 		}
 		// Emit refcount cleanup for all active scopes before returning.
 		for (auto& scope : scopes) {
@@ -2256,28 +2140,28 @@ void CodeGen::generateReturn(const ReturnStmt& stmt) {
 // Expression statement
 // ==========================
 
-void CodeGen::generateExprStmt(const ExprStmt& stmt) {
-	generateExpression(*stmt.expression);
+void CodeGen::generateExprStmt(const bytefrost::HIRExprStmt& stmt) {
+	generateExpression(*stmt.expr);
 }
 
 // ==========================
 // Expression dispatch
 // ==========================
 
-llvm::Value* CodeGen::generateExpression(const Expression& expr) {
-	if (auto* e = dynamic_cast<const IntLiteralExpr*>(&expr)) {
+llvm::Value* CodeGen::generateExpression(const bytefrost::HIRExpr& expr) {
+	if (auto* e = dynamic_cast<const bytefrost::HIRIntLit*>(&expr)) {
 		return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), e->value);
 	}
-	if (auto* e = dynamic_cast<const FloatLiteralExpr*>(&expr)) {
+	if (auto* e = dynamic_cast<const bytefrost::HIRFloatLit*>(&expr)) {
 		return llvm::ConstantFP::get(llvm::Type::getDoubleTy(*context), e->value);
 	}
-	if (auto* e = dynamic_cast<const BoolLiteralExpr*>(&expr)) {
+	if (auto* e = dynamic_cast<const bytefrost::HIRBoolLit*>(&expr)) {
 		return llvm::ConstantInt::get(llvm::Type::getInt1Ty(*context), e->value ? 1 : 0);
 	}
-	if (auto* e = dynamic_cast<const StringLiteralExpr*>(&expr)) {
+	if (auto* e = dynamic_cast<const bytefrost::HIRStringLit*>(&expr)) {
 		return builder->CreateGlobalStringPtr(e->value, "str");
 	}
-	if (auto* e = dynamic_cast<const CharLiteralExpr*>(&expr)) {
+	if (auto* e = dynamic_cast<const bytefrost::HIRCharLit*>(&expr)) {
 		if (e->value.empty())
 			return llvm::ConstantInt::get(llvm::Type::getInt8Ty(*context), 0);
 		char c = e->value[0];
@@ -2306,40 +2190,53 @@ llvm::Value* CodeGen::generateExpression(const Expression& expr) {
 		}
 		return llvm::ConstantInt::get(llvm::Type::getInt8Ty(*context), c);
 	}
-	if (auto* e = dynamic_cast<const IdentifierExpr*>(&expr)) {
+	if (auto* e = dynamic_cast<const bytefrost::HIRVar*>(&expr)) {
 		return generateIdentifier(*e);
 	}
-	if (auto* e = dynamic_cast<const BinaryExpr*>(&expr)) {
+	if (auto* e = dynamic_cast<const bytefrost::HIRBinaryExpr*>(&expr)) {
+		// Detect assignment expression encoded as binary with "assign_expr:" prefix.
+		if (e->op.size() > 12 && e->op.substr(0, 12) == "assign_expr:") {
+			std::string realOp = e->op.substr(12);
+			llvm::Value* ptr = generateLValue(*e->left);
+			llvm::Value* rhs = generateExpression(*e->right);
+			if (realOp == "=") {
+				builder->CreateStore(rhs, ptr);
+			} else {
+				// Load, compute, store for compound ops.
+				llvm::Type* elemType = rhs->getType();
+				llvm::Value* lhsVal = builder->CreateLoad(elemType, ptr, "lhs");
+				llvm::Value* result = nullptr;
+				if (realOp == "+=") result = builder->CreateAdd(lhsVal, rhs, "add");
+				else if (realOp == "-=") result = builder->CreateSub(lhsVal, rhs, "sub");
+				else if (realOp == "*=") result = builder->CreateMul(lhsVal, rhs, "mul");
+				else if (realOp == "/=") result = builder->CreateSDiv(lhsVal, rhs, "div");
+				else result = rhs;
+				builder->CreateStore(result, ptr);
+			}
+			return rhs;
+		}
 		return generateBinary(*e);
 	}
-	if (auto* e = dynamic_cast<const UnaryExpr*>(&expr)) {
+	if (auto* e = dynamic_cast<const bytefrost::HIRUnaryExpr*>(&expr)) {
 		return generateUnary(*e);
 	}
-	if (auto* e = dynamic_cast<const CallExpr*>(&expr)) {
+	if (auto* e = dynamic_cast<const bytefrost::HIRCallExpr*>(&expr)) {
 		return generateCall(*e);
 	}
-	if (auto* e = dynamic_cast<const AssignExpr*>(&expr)) {
-		// Handle assignment expressions (e.g., inside for-update).
-		llvm::Value* ptr = generateLValue(*e->target);
-		llvm::Value* rhs = generateExpression(*e->value);
-		builder->CreateStore(rhs, ptr);
-		return rhs;
-	}
-	if (auto* e = dynamic_cast<const IndexExpr*>(&expr)) {
+	if (auto* e = dynamic_cast<const bytefrost::HIRIndexExpr*>(&expr)) {
 		return generateIndex(*e);
 	}
-	if (auto* e = dynamic_cast<const MemberAccessExpr*>(&expr)) {
+	if (auto* e = dynamic_cast<const bytefrost::HIRMemberAccess*>(&expr)) {
 		return generateMemberAccess(*e);
 	}
-	if (dynamic_cast<const NullLiteralExpr*>(&expr)) {
+	if (dynamic_cast<const bytefrost::HIRNullLit*>(&expr)) {
 		return llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(*context));
 	}
-	if (dynamic_cast<const ThisExpr*>(&expr)) {
-		// Load the this pointer.
+	if (dynamic_cast<const bytefrost::HIRThis*>(&expr)) {
 		llvm::Type* thisType = lookupVarType("this");
 		return builder->CreateLoad(thisType, lookupVariable("this"), "this.ptr");
 	}
-	if (auto* e = dynamic_cast<const InterpolatedStringExpr*>(&expr)) {
+	if (auto* e = dynamic_cast<const bytefrost::HIRInterpolatedString*>(&expr)) {
 		return generateInterpolatedString(*e);
 	}
 	throw CodeGenError("Unsupported expression type");
@@ -2349,7 +2246,7 @@ llvm::Value* CodeGen::generateExpression(const Expression& expr) {
 // Identifier (load from variable)
 // ==========================
 
-llvm::Value* CodeGen::generateIdentifier(const IdentifierExpr& expr) {
+llvm::Value* CodeGen::generateIdentifier(const bytefrost::HIRVar& expr) {
 	auto alloca = lookupVariable(expr.name);
 	auto type = lookupVarType(expr.name);
 	return builder->CreateLoad(type, alloca, expr.name);
@@ -2359,8 +2256,8 @@ llvm::Value* CodeGen::generateIdentifier(const IdentifierExpr& expr) {
 // Index expression (array[i])
 // ==========================
 
-llvm::Value* CodeGen::generateIndex(const IndexExpr& expr) {
-	if (auto* ident = dynamic_cast<const IdentifierExpr*>(expr.object.get())) {
+llvm::Value* CodeGen::generateIndex(const bytefrost::HIRIndexExpr& expr) {
+	if (auto* ident = dynamic_cast<const bytefrost::HIRVar*>(expr.object.get())) {
 		std::string bfType = lookupVarBFTypeName(ident->name);
 
 		// Array index
@@ -2396,7 +2293,7 @@ llvm::Value* CodeGen::generateIndex(const IndexExpr& expr) {
 	}
 
 	// Chained member index: this.field[i] or obj.field[i]
-	if (auto* ma = dynamic_cast<const MemberAccessExpr*>(expr.object.get())) {
+	if (auto* ma = dynamic_cast<const bytefrost::HIRMemberAccess*>(expr.object.get())) {
 		auto [basePtr, baseBFType] = resolveStructBase(*ma->object);
 		auto baseStructIt = structRegistry.find(baseBFType);
 		if (baseStructIt != structRegistry.end()) {
@@ -2429,9 +2326,9 @@ llvm::Value* CodeGen::generateIndex(const IndexExpr& expr) {
 // Member access (obj.field)
 // ==========================
 
-llvm::Value* CodeGen::generateMemberAccess(const MemberAccessExpr& expr) {
+llvm::Value* CodeGen::generateMemberAccess(const bytefrost::HIRMemberAccess& expr) {
 	// Check for enum member access: CardRanks.ACE
-	if (auto* id = dynamic_cast<const IdentifierExpr*>(expr.object.get())) {
+	if (auto* id = dynamic_cast<const bytefrost::HIRVar*>(expr.object.get())) {
 		auto enumIt = enumRegistry.find(id->name);
 		if (enumIt != enumRegistry.end()) {
 			auto variantIt = enumIt->second.variants.find(expr.member);
@@ -2463,7 +2360,7 @@ llvm::Value* CodeGen::generateMemberAccess(const MemberAccessExpr& expr) {
 // Interpolated string generation
 // ==========================
 
-llvm::Value* CodeGen::generateInterpolatedString(const InterpolatedStringExpr& expr) {
+llvm::Value* CodeGen::generateInterpolatedString(const bytefrost::HIRInterpolatedString& expr) {
 	// Build printf-style format string and collect argument values.
 	std::string formatStr;
 	std::vector<llvm::Value*> args;
@@ -2481,7 +2378,7 @@ llvm::Value* CodeGen::generateInterpolatedString(const InterpolatedStringExpr& e
 		llvm::Value* val = generateExpression(*expr.expressions[i]);
 
 		// Enum type: convert to string name.
-		std::string valBFType = getExprBFType(*expr.expressions[i]);
+		std::string valBFType = bfTypeToString(expr.expressions[i]->type);
 		if (!valBFType.empty() && enumRegistry.count(valBFType)) {
 			val = generateEnumToString(val, valBFType);
 			formatStr += "%s";
@@ -2539,24 +2436,7 @@ llvm::Value* CodeGen::generateInterpolatedString(const InterpolatedStringExpr& e
 // Binary expressions
 // ==========================
 
-llvm::Value* CodeGen::generateBinary(const BinaryExpr& expr) {
-	// Pre-check enum type safety for all comparison operators before generating values.
-	static const std::vector<std::string> cmpOps = {"==", "!=", "<", ">", "<=", ">="};
-	if (std::find(cmpOps.begin(), cmpOps.end(), expr.op) != cmpOps.end()) {
-		std::string lhsBFType = getExprBFType(*expr.left);
-		std::string rhsBFType = getExprBFType(*expr.right);
-		bool lhsIsEnum = !lhsBFType.empty() && enumRegistry.count(lhsBFType);
-		bool rhsIsEnum = !rhsBFType.empty() && enumRegistry.count(rhsBFType);
-		if (lhsIsEnum || rhsIsEnum) {
-			if (!lhsIsEnum || !rhsIsEnum || lhsBFType != rhsBFType) {
-				throw CodeGenError(
-					"Type error: cannot compare '" + (lhsIsEnum ? lhsBFType : "non-enum")
-					+ "' with '" + (rhsIsEnum ? rhsBFType : "non-enum")
-					+ "'. Enum values can only be compared with values of the same enum type.");
-			}
-		}
-	}
-
+llvm::Value* CodeGen::generateBinary(const bytefrost::HIRBinaryExpr& expr) {
 	llvm::Value* lhs = generateExpression(*expr.left);
 	llvm::Value* rhs = generateExpression(*expr.right);
 
@@ -2667,7 +2547,7 @@ llvm::Value* CodeGen::generateBinary(const BinaryExpr& expr) {
 // Unary expressions
 // ==========================
 
-llvm::Value* CodeGen::generateUnary(const UnaryExpr& expr) {
+llvm::Value* CodeGen::generateUnary(const bytefrost::HIRUnaryExpr& expr) {
 	if (expr.prefix) {
 		llvm::Value* operand = generateExpression(*expr.operand);
 		if (expr.op == "-") {
@@ -2688,7 +2568,7 @@ llvm::Value* CodeGen::generateUnary(const UnaryExpr& expr) {
 		throw CodeGenError("Unsupported prefix operator: " + expr.op);
 	} else {
 		// Postfix: ++ or --
-		auto* ident = dynamic_cast<const IdentifierExpr*>(expr.operand.get());
+		auto* ident = dynamic_cast<const bytefrost::HIRVar*>(expr.operand.get());
 		if (!ident)
 			throw CodeGenError("Postfix operator requires an identifier");
 
@@ -2713,16 +2593,16 @@ llvm::Value* CodeGen::generateUnary(const UnaryExpr& expr) {
 // Function calls
 // ==========================
 
-llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
+llvm::Value* CodeGen::generateCall(const bytefrost::HIRCallExpr& expr) {
 	// Check for built-in: print
-	auto* callee = dynamic_cast<const IdentifierExpr*>(expr.callee.get());
+	auto* callee = dynamic_cast<const bytefrost::HIRVar*>(expr.callee.get());
 	if (callee && callee->name == "print") {
-		return generatePrintCall(expr.arguments);
+		return generatePrintCall(expr.args);
 	}
 
 	// Check for built-in: input (default to string when called standalone)
 	if (callee && callee->name == "input") {
-		return generateInputCall(expr.arguments, "string");
+		return generateInputCall(expr.args, "string");
 	}
 
 	// Check for built-in: rand() -> int
@@ -2746,9 +2626,9 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 			auto srandType = llvm::FunctionType::get(llvm::Type::getVoidTy(*context), {i32}, false);
 			srandFn = llvm::Function::Create(srandType, llvm::Function::ExternalLinkage, "srand", module.get());
 		}
-		if (expr.arguments.empty())
+		if (expr.args.empty())
 			throw CodeGenError("srand() requires 1 argument");
-		llvm::Value* seed = generateExpression(*expr.arguments[0]);
+		llvm::Value* seed = generateExpression(*expr.args[0]);
 		if (!seed->getType()->isIntegerTy(32))
 			seed = builder->CreateTrunc(seed, i32, "srand.seed");
 		builder->CreateCall(srandFn, {seed});
@@ -2770,7 +2650,7 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 
 	// Check for math stdlib functions.
 	if (callee && stdlibMathNames().count(callee->name) && !overriddenMathFuncs_.count(callee->name)) {
-		return generateMathCall(callee->name, expr.arguments);
+		return generateMathCall(callee->name, expr.args);
 	}
 
 	// Check for constructor call: StructName(args...)
@@ -2814,7 +2694,7 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 			if (!ctor)
 				throw CodeGenError("Constructor not found for " + callee->name);
 			std::vector<llvm::Value*> args = {heapPtr};
-			for (const auto& arg : expr.arguments) {
+			for (const auto& arg : expr.args) {
 				args.push_back(generateExpression(*arg));
 			}
 			builder->CreateCall(ctor, args);
@@ -2823,7 +2703,7 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 		}
 		// Implicit default construction: StructName() with no args and no explicit constructor.
 		// malloc + zero-init + auto-init array fields + call embedded struct constructors.
-		if (structIt != structRegistry.end() && !structIt->second.hasConstructor && expr.arguments.empty()) {
+		if (structIt != structRegistry.end() && !structIt->second.hasConstructor && expr.args.empty()) {
 			auto& info = structIt->second;
 			auto* i64 = llvm::Type::getInt64Ty(*context);
 			uint64_t structSize = module->getDataLayout().getTypeAllocSize(info.llvmType);
@@ -2875,11 +2755,11 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 	}
 
 	// Check for method call: obj.method() or obj.push()/obj.length()
-	if (auto* memberAccess = dynamic_cast<const MemberAccessExpr*>(expr.callee.get())) {
+	if (auto* memberAccess = dynamic_cast<const bytefrost::HIRMemberAccess*>(expr.callee.get())) {
 		std::string bfType;
 		llvm::Value* objPtr = nullptr;
 
-		if (auto* ident = dynamic_cast<const IdentifierExpr*>(memberAccess->object.get())) {
+		if (auto* ident = dynamic_cast<const bytefrost::HIRVar*>(memberAccess->object.get())) {
 			// Namespace import qualified call: utils.abs(-7) where 'utils' was introduced
 			// by 'import math.utils;'.  Resolved directly to the LLVM function; no stdlib
 			// intercept, since the qualification makes intent unambiguous.
@@ -2889,7 +2769,7 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 					throw CodeGenError("Undefined function '" + memberAccess->member + "' in module namespace '"
 									   + ident->name + "'");
 				std::vector<llvm::Value*> callArgs;
-				for (const auto& arg : expr.arguments)
+				for (const auto& arg : expr.args)
 					callArgs.push_back(generateExpression(*arg));
 				if (fn->getReturnType()->isVoidTy()) {
 					builder->CreateCall(fn, callArgs);
@@ -2913,10 +2793,10 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 					return builder->CreateLoad(llvm::Type::getInt64Ty(*context), lenPtr, "len");
 				}
 				if (memberAccess->member == "push") {
-					if (expr.arguments.size() != 1) {
+					if (expr.args.size() != 1) {
 						throw CodeGenError("push() expects exactly 1 argument");
 					}
-					llvm::Value* val = generateExpression(*expr.arguments[0]);
+					llvm::Value* val = generateExpression(*expr.args[0]);
 					generateArrayPush(arrAlloca, elemType, val);
 					return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 0);
 				}
@@ -2926,11 +2806,11 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 			// Struct method calls — struct variables are always ptrType allocas.
 			llvm::Type* varType = lookupVarType(ident->name);
 			objPtr = builder->CreateLoad(varType, lookupVariable(ident->name), ident->name + ".ptr");
-		} else if (dynamic_cast<const ThisExpr*>(memberAccess->object.get())) {
+		} else if (dynamic_cast<const bytefrost::HIRThis*>(memberAccess->object.get())) {
 			bfType = lookupVarBFTypeName("this");
 			llvm::Type* thisType = lookupVarType("this");
 			objPtr = builder->CreateLoad(thisType, lookupVariable("this"), "this.ptr");
-		} else if (auto* innerMA = dynamic_cast<const MemberAccessExpr*>(memberAccess->object.get())) {
+		} else if (auto* innerMA = dynamic_cast<const bytefrost::HIRMemberAccess*>(memberAccess->object.get())) {
 			// Chained member access: e.g. this.values.push(x) or obj.hand.add(v)
 			// Resolve the inner access to get (basePtr, structBFType).
 			auto [basePtr, baseBFType] = resolveStructBase(*innerMA->object);
@@ -2955,9 +2835,9 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 								return builder->CreateLoad(llvm::Type::getInt64Ty(*context), lenPtr, "len");
 							}
 							if (memberAccess->member == "push") {
-								if (expr.arguments.size() != 1)
+								if (expr.args.size() != 1)
 									throw CodeGenError("push() expects exactly 1 argument");
-								llvm::Value* val = generateExpression(*expr.arguments[0]);
+								llvm::Value* val = generateExpression(*expr.args[0]);
 								generateArrayPush(fieldGEP, eType, val);
 								return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 0);
 							}
@@ -2971,8 +2851,8 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 				}
 			}
 		// IndexExpr object: arr[i].method() or this.field[i].method()
-		} else if (auto* idxExpr = dynamic_cast<const IndexExpr*>(memberAccess->object.get())) {
-			std::string arrBFType = getExprBFType(*idxExpr->object);
+		} else if (auto* idxExpr = dynamic_cast<const bytefrost::HIRIndexExpr*>(memberAccess->object.get())) {
+			std::string arrBFType = bfTypeToString(idxExpr->object->type);
 			if (arrBFType.size() > 6 && arrBFType.substr(0, 6) == "array<") {
 				bfType = arrBFType.substr(6, arrBFType.size() - 7);
 				objPtr = generateIndex(*idxExpr);
@@ -2990,7 +2870,7 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 					throw CodeGenError("Undefined method: " + methodIt->second);
 
 				std::vector<llvm::Value*> args = {objPtr};
-				for (const auto& arg : expr.arguments) {
+				for (const auto& arg : expr.args) {
 					args.push_back(generateExpression(*arg));
 				}
 
@@ -3027,7 +2907,7 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 		throw CodeGenError("Undefined function: " + fnName);
 
 	std::vector<llvm::Value*> args;
-	for (const auto& arg : expr.arguments) {
+	for (const auto& arg : expr.args) {
 		args.push_back(generateExpression(*arg));
 	}
 
@@ -3042,7 +2922,7 @@ llvm::Value* CodeGen::generateCall(const CallExpr& expr) {
 // Built-in: print()
 // ==========================
 
-llvm::Value* CodeGen::generatePrintCall(const std::vector<ExprPtr>& args) {
+llvm::Value* CodeGen::generatePrintCall(const std::vector<bytefrost::HIRExprPtr>& args) {
 	if (args.empty()) {
 		// print() with no args = print newline
 		llvm::Value* fmt = builder->CreateGlobalStringPtr("\n", "fmt");
@@ -3051,7 +2931,7 @@ llvm::Value* CodeGen::generatePrintCall(const std::vector<ExprPtr>& args) {
 
 	for (const auto& arg : args) {
 		// Check for print(array_var) — detect by BF type name
-		if (auto* ident = dynamic_cast<const IdentifierExpr*>(arg.get())) {
+		if (auto* ident = dynamic_cast<const bytefrost::HIRVar*>(arg.get())) {
 			std::string bfType = lookupVarBFTypeName(ident->name);
 			if (bfType.substr(0, 6) == "array<") {
 				std::string elemTypeName = bfType.substr(6, bfType.size() - 7);
@@ -3077,7 +2957,7 @@ llvm::Value* CodeGen::generatePrintCall(const std::vector<ExprPtr>& args) {
 
 		// Check for enum-typed expression (identifier, member access, etc.).
 		{
-			std::string argBFType = getExprBFType(*arg);
+			std::string argBFType = bfTypeToString(arg->type);
 			if (!argBFType.empty() && enumRegistry.count(argBFType)) {
 				llvm::Value* enumVal = generateExpression(*arg);
 				llvm::Value* nameStr = generateEnumToString(enumVal, argBFType);
@@ -3087,8 +2967,8 @@ llvm::Value* CodeGen::generatePrintCall(const std::vector<ExprPtr>& args) {
 			}
 		}
 
-		// Special case: InterpolatedStringExpr inside print → use printf directly
-		if (auto* interpStr = dynamic_cast<const InterpolatedStringExpr*>(arg.get())) {
+		// Special case: HIRInterpolatedString inside print → use printf directly
+		if (auto* interpStr = dynamic_cast<const bytefrost::HIRInterpolatedString*>(arg.get())) {
 			// Build format string with \n at the end.
 			std::string formatStr;
 			std::vector<llvm::Value*> printArgs;
@@ -3104,7 +2984,7 @@ llvm::Value* CodeGen::generatePrintCall(const std::vector<ExprPtr>& args) {
 				llvm::Value* val = generateExpression(*interpStr->expressions[i]);
 
 				// Enum type: convert to string name.
-				std::string valBFType = getExprBFType(*interpStr->expressions[i]);
+				std::string valBFType = bfTypeToString(interpStr->expressions[i]->type);
 				if (!valBFType.empty() && enumRegistry.count(valBFType)) {
 					val = generateEnumToString(val, valBFType);
 					formatStr += "%s";
@@ -3173,7 +3053,7 @@ llvm::Value* CodeGen::generatePrintCall(const std::vector<ExprPtr>& args) {
 // Input built-in
 // ==========================
 
-llvm::Value* CodeGen::generateInputCall(const std::vector<ExprPtr>& args, const std::string& targetTypeName) {
+llvm::Value* CodeGen::generateInputCall(const std::vector<bytefrost::HIRExprPtr>& args, const std::string& targetTypeName) {
 	auto* fn = builder->GetInsertBlock()->getParent();
 	auto* i8Ptr = llvm::PointerType::getUnqual(*context);
 	auto* i32 = llvm::Type::getInt32Ty(*context);
@@ -3378,7 +3258,7 @@ void CodeGen::generatePrintMap(llvm::AllocaInst* mapAlloca, llvm::Type* keyType,
 // Math stdlib
 // ==========================
 
-llvm::Value* CodeGen::generateMathCall(const std::string& name, const std::vector<ExprPtr>& args) {
+llvm::Value* CodeGen::generateMathCall(const std::string& name, const std::vector<bytefrost::HIRExprPtr>& args) {
 	auto* f64 = llvm::Type::getDoubleTy(*context);
 	auto* i64 = llvm::Type::getInt64Ty(*context);
 

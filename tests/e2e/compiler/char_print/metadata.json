@@ -1,0 +1,7 @@
+{
+  "id": "char_print",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Char literal printing",
+  "timeoutSeconds": 10
+}

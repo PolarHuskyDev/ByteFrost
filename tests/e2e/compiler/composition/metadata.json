@@ -1,0 +1,7 @@
+{
+  "id": "composition",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Struct composition and chained access",
+  "timeoutSeconds": 10
+}

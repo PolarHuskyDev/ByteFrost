@@ -1,0 +1,7 @@
+{
+  "id": "enums",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Enum declarations and comparisons",
+  "timeoutSeconds": 10
+}

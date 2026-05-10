@@ -1,0 +1,7 @@
+{
+  "id": "const_reassign_rejected",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Const variable cannot be reassigned",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "hello_world",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Basic hello world program",
+  "timeoutSeconds": 10
+}

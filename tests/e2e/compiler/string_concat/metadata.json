@@ -1,0 +1,7 @@
+{
+  "id": "string_concat",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "String concatenation with + not yet fully implemented",
+  "timeoutSeconds": 10
+}

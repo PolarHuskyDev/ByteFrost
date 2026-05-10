@@ -1,0 +1,7 @@
+{
+  "id": "readonly_field",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Readonly struct fields set in constructor and accessible",
+  "timeoutSeconds": 10
+}

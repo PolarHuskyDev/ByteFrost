@@ -1,0 +1,7 @@
+{
+  "id": "match",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Pattern matching on string",
+  "timeoutSeconds": 10
+}

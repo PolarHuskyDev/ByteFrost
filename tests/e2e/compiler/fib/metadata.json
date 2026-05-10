@@ -1,0 +1,7 @@
+{
+  "id": "fib",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Recursive Fibonacci",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "operators",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Arithmetic, logical, bitwise, compound ops",
+  "timeoutSeconds": 10
+}
