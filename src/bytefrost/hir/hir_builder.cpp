@@ -71,9 +71,11 @@ HIRStruct HIRBuilder::buildStruct(const StructDecl& d) {
     for (const auto& m : d.members) {
         if (m.kind == StructMember::FIELD) {
             HIRStructField hf;
-            hf.name = m.fieldName;
-            hf.type = m.fieldType ? typeNodeToBFType(*m.fieldType)
-                                  : BFType::makeUnknown();
+            hf.name       = m.fieldName;
+            hf.type       = m.fieldType ? typeNodeToBFType(*m.fieldType)
+                                        : BFType::makeUnknown();
+            hf.isReadonly = m.isReadonly;  // E.3
+            hf.isConstant = m.isConstant;  // E.3
             structFieldTypes_[d.name][m.fieldName] = hf.type;
             hs.fields.push_back(std::move(hf));
         } else if (m.kind == StructMember::METHOD && m.method) {
@@ -110,13 +112,12 @@ HIRFunction HIRBuilder::buildFunction(const FunctionDecl& fn,
 
     // Inject 'this' for methods.
     if (!ownerStruct.empty()) {
-        scopes_.declare("this", {"this", BFType::makeStruct(ownerStruct),
-                                 false, false, {}});
+        scopes_.declare("this", {"this", BFType::makeStruct(ownerStruct), false, ConstInitState::Uninitialized, {}});
     }
 
     // Declare parameters in scope.
     for (const auto& p : hf.params) {
-        scopes_.declare(p.name, {p.name, p.type, true, false, {}});
+        scopes_.declare(p.name, {p.name, p.type, false, ConstInitState::Uninitialized, {}});
     }
 
     hf.body = buildBlock(fn.body);
@@ -191,9 +192,13 @@ HIRStmtPtr HIRBuilder::buildVarDecl(const VarDeclStmt& s) {
         node->bfType = initType;
     }
     node->init = std::move(init);
+    node->isConstant = s.isConstant;  // E.2
 
     // Register in current scope so later references resolve.
-    scopes_.declare(s.name, {s.name, node->bfType, true, false, {}});
+    ConstInitState initState = (s.isConstant && s.initializer)
+                             ? ConstInitState::InitializedOnce
+                             : ConstInitState::Uninitialized;
+    scopes_.declare(s.name, {s.name, node->bfType, s.isConstant, initState, {}});
     return node;
 }
 
@@ -247,10 +252,10 @@ HIRStmtPtr HIRBuilder::buildForIn(const ForInStmt& s) {
     node->column     = s.column;
     node->varName    = s.varName;
     node->varType    = s.varType ? typeNodeToBFType(*s.varType) : BFType::makeInt();
-    node->rangeStart = buildExpr(*s.rangeStart);
-    node->rangeEnd   = buildExpr(*s.rangeEnd);
+    // Phase 3: Updated for-in loop handling with single range field
+    node->range = buildExpr(*s.range);
     scopes_.pushScope();
-    scopes_.declare(s.varName, {s.varName, node->varType, true, false, {}});
+    scopes_.declare(s.varName, {s.varName, node->varType, false, ConstInitState::Uninitialized, {}});
     node->body = buildBlock(s.body);
     scopes_.popScope();
     return node;
@@ -335,6 +340,11 @@ HIRExprPtr HIRBuilder::buildExpr(const Expression& expr) {
         BFType t = resolveIdentifierType(e->name);
         auto n = std::make_unique<HIRVar>(e->name, t);
         n->line = e->line; n->column = e->column;
+        // E.1: propagate compile-time constant flag from symbol table.
+        if (const auto* sym = scopes_.lookup(e->name)) {
+            n->isCompileTimeConstant = sym->isConstant &&
+                                       sym->constInitState == ConstInitState::InitializedOnce;
+        }
         return n;
     }
     if (auto* e = dynamic_cast<const BinaryExpr*>(&expr))
@@ -376,16 +386,20 @@ HIRExprPtr HIRBuilder::buildBinary(const BinaryExpr& e) {
     auto left  = buildExpr(*e.left);
     auto right = buildExpr(*e.right);
     BFType t = inferBinaryResultType(e.op, left->type, right->type);
+    bool isConst = left->isCompileTimeConstant && right->isCompileTimeConstant;  // E.1
     auto n = std::make_unique<HIRBinaryExpr>(e.op, std::move(left), std::move(right), t);
     n->line = e.line; n->column = e.column;
+    n->isCompileTimeConstant = isConst;
     return n;
 }
 
 HIRExprPtr HIRBuilder::buildUnary(const UnaryExpr& e) {
     auto operand = buildExpr(*e.operand);
     BFType t = operand->type;
+    bool isConst = operand->isCompileTimeConstant;  // E.1
     auto n = std::make_unique<HIRUnaryExpr>(e.op, std::move(operand), e.prefix, t);
     n->line = e.line; n->column = e.column;
+    n->isCompileTimeConstant = isConst;
     return n;
 }
 

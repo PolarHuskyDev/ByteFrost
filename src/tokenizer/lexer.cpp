@@ -37,6 +37,8 @@ const std::unordered_map<std::string, TokenType> Lexer::keywords = {
 	{"as", TokenType::AS_TOKEN},
 	{"overridden", TokenType::OVERRIDDEN_TOKEN},
 	{"enum", TokenType::ENUM_TOKEN},
+	{"const", TokenType::CONST_TOKEN},        // Phase 3: const keyword
+	{"readonly", TokenType::READONLY_TOKEN},  // Phase 3: readonly keyword
 };
 
 // ==========================
@@ -181,7 +183,7 @@ Token Lexer::nextToken() {
 bool Lexer::isSpecialChar(char c) const {
 	return c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '=' || c == '!' || c == '<' || c == '>'
 		   || c == '(' || c == ')' || c == '{' || c == '}' || c == '[' || c == ']' || c == ';' || c == ':' || c == ','
-		   || c == '.' || c == '&' || c == '|' || c == '^' || c == '~';
+		   || c == '.' || c == '?' || c == '&' || c == '|' || c == '^' || c == '~';
 }
 
 Token Lexer::parseOperatorOrDelimiter() {
@@ -313,6 +315,14 @@ Token Lexer::parseOperatorOrDelimiter() {
 				return Token(TokenType::DOTDOT_TOKEN, "..", line, startColumn);
 			}
 			break;
+		case '?':
+			// Phase 3: Handle ? and ?.
+			if (peek() == '.') {
+				advance();
+				advance();
+				return Token(TokenType::QUESTION_DOT_TOKEN, "?.", line, startColumn);
+			}
+			break;
 		default:
 			break;
 	}
@@ -366,6 +376,8 @@ Token Lexer::parseOperatorOrDelimiter() {
 			return Token(TokenType::COMMA_TOKEN, ",", line, startColumn);
 		case '.':
 			return Token(TokenType::DOT_TOKEN, ".", line, startColumn);
+		case '?':
+			return Token(TokenType::QUESTION_TOKEN, "?", line, startColumn);
 		default:
 			return Token(TokenType::UNKNOWN_TOKEN, std::string(1, c), line, startColumn);
 	}

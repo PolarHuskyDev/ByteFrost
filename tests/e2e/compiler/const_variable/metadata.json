@@ -1,0 +1,7 @@
+{
+  "id": "const_variable",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Const variable declaration and usage",
+  "timeoutSeconds": 10
+}

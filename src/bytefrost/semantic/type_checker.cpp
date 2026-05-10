@@ -37,6 +37,14 @@ bool TypeChecker::isAssignable(const BFType& from, const BFType& to) const {
 	if (from == to)
 		return true;
 
+	// Assign T to T? (nullable target).
+	if (to.isNullable() && to.elemType && *to.elemType == from)
+		return true;
+
+	// Assign T? to T is invalid unless explicitly narrowed.
+	if (from.isNullable() && !to.isNullable())
+		return false;
+
 	// int is assignable to float (widening).
 	if (from.isInt() && to.isFloat())
 		return true;

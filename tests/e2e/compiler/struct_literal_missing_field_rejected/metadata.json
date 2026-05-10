@@ -1,0 +1,7 @@
+{
+  "id": "struct_literal_missing_field_rejected",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Struct literal missing required non-nullable field must fail",
+  "timeoutSeconds": 10
+}

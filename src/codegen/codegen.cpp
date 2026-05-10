@@ -139,7 +139,9 @@ void CodeGen::buildIR(const Program& program) {
 	if (!semantic.analyze(program)) {
 		std::ostringstream diagText;
 		semantic.diagnostics().emit(diagText, /*useColor=*/false);
-		semantic.diagnostics().emitToStderr();
+		// Do NOT emit to stderr here — callers (main.cpp, orca) handle
+		// printing.  Emitting here causes noise in unit tests that
+		// intentionally trigger errors via EXPECT_THROW.
 		throw CodeGenError(diagText.str());
 	}
 
@@ -1925,35 +1927,57 @@ void CodeGen::generateFor(const bytefrost::HIRFor& stmt) {
 
 void CodeGen::generateForIn(const bytefrost::HIRForIn& stmt) {
 	auto* fn = builder->GetInsertBlock()->getParent();
+	llvm::Type* i64 = llvm::Type::getInt64Ty(*context);
 
+	// Resolve the array alloca and its LLVM struct type.
+	// The range expression must be an HIRVar naming an array variable.
+	auto* rangeVar = dynamic_cast<const bytefrost::HIRVar*>(stmt.range.get());
+	if (!rangeVar) {
+		throw CodeGenError("for-in range must be an array variable");
+	}
+	llvm::AllocaInst* arrAlloca = lookupVariable(rangeVar->name);
+	llvm::Type* arrType = lookupVarType(rangeVar->name);
+	llvm::Type* elemType = getLLVMType(stmt.varType);
+
+	// Array struct layout: { elem_ptr*, i64 length, i64 capacity, i64* refcount }
+	// Load length (field index 1).
+	auto* lenPtr = builder->CreateStructGEP(arrType, arrAlloca, 1, "forin.len.ptr");
+	llvm::Value* arrLen = builder->CreateLoad(i64, lenPtr, "forin.len");
+
+	// Index counter alloca (starts at 0).
+	auto* idxAlloca = createEntryBlockAlloca(fn, "forin.idx", i64);
+	builder->CreateStore(llvm::ConstantInt::get(i64, 0), idxAlloca);
+
+	// Loop variable alloca (holds current element each iteration).
 	pushScope();
+	auto* elemAlloca = createEntryBlockAlloca(fn, stmt.varName, elemType);
+	declareVariable(stmt.varName, elemAlloca, elemType);
 
-	llvm::Type* varType = getLLVMType(stmt.varType);
-	auto alloca = createEntryBlockAlloca(fn, stmt.varName, varType);
-	llvm::Value* startVal = generateExpression(*stmt.rangeStart);
-	builder->CreateStore(startVal, alloca);
-	declareVariable(stmt.varName, alloca, varType);
-
-	llvm::Value* endVal = generateExpression(*stmt.rangeEnd);
-
-	auto* condBB = llvm::BasicBlock::Create(*context, "forin.cond", fn);
-	auto* bodyBB = llvm::BasicBlock::Create(*context, "forin.body", fn);
+	auto* condBB   = llvm::BasicBlock::Create(*context, "forin.cond",   fn);
+	auto* bodyBB   = llvm::BasicBlock::Create(*context, "forin.body",   fn);
 	auto* updateBB = llvm::BasicBlock::Create(*context, "forin.update", fn);
-	auto* endBB = llvm::BasicBlock::Create(*context, "forin.end", fn);
+	auto* endBB    = llvm::BasicBlock::Create(*context, "forin.end",    fn);
 
 	builder->CreateBr(condBB);
 
-	// Condition: i < end.
+	// Condition: idx < arrLen
 	builder->SetInsertPoint(condBB);
-	llvm::Value* curVal = builder->CreateLoad(varType, alloca, stmt.varName);
-	llvm::Value* cond = builder->CreateICmpSLT(curVal, endVal, "forin.cmp");
+	llvm::Value* idx = builder->CreateLoad(i64, idxAlloca, "forin.idx");
+	llvm::Value* cond = builder->CreateICmpSLT(idx, arrLen, "forin.cond");
 	builder->CreateCondBr(cond, bodyBB, endBB);
 
-	// Body.
+	// Body: load data[idx] into the loop variable, then run statements.
 	breakTargets.push_back(endBB);
 	continueTargets.push_back(updateBB);
 
 	builder->SetInsertPoint(bodyBB);
+	auto* dataPtr = builder->CreateStructGEP(arrType, arrAlloca, 0, "forin.data.ptr");
+	llvm::Value* data = builder->CreateLoad(llvm::PointerType::getUnqual(*context), dataPtr, "forin.data");
+	llvm::Value* idxBody = builder->CreateLoad(i64, idxAlloca, "forin.idx.body");
+	llvm::Value* elemPtr = builder->CreateGEP(elemType, data, idxBody, "forin.elem.ptr");
+	llvm::Value* elemVal = builder->CreateLoad(elemType, elemPtr, "forin.elem");
+	builder->CreateStore(elemVal, elemAlloca);
+
 	for (const auto& s : stmt.body.stmts) {
 		generateStatement(*s);
 		if (builder->GetInsertBlock()->getTerminator())
@@ -1966,11 +1990,11 @@ void CodeGen::generateForIn(const bytefrost::HIRForIn& stmt) {
 	breakTargets.pop_back();
 	continueTargets.pop_back();
 
-	// Update: i++.
+	// Update: idx++
 	builder->SetInsertPoint(updateBB);
-	llvm::Value* cur = builder->CreateLoad(varType, alloca, stmt.varName);
-	llvm::Value* next = builder->CreateAdd(cur, llvm::ConstantInt::get(varType, 1), "forin.inc");
-	builder->CreateStore(next, alloca);
+	llvm::Value* idxUpd = builder->CreateLoad(i64, idxAlloca, "forin.idx.upd");
+	llvm::Value* idxNext = builder->CreateAdd(idxUpd, llvm::ConstantInt::get(i64, 1), "forin.idx.next");
+	builder->CreateStore(idxNext, idxAlloca);
 	builder->CreateBr(condBB);
 
 	popScope();

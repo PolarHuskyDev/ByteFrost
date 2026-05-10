@@ -46,8 +46,11 @@ using HIRStmtPtr = std::unique_ptr<HIRStmt>;
 /// Every node carries its resolved type and source location.
 struct HIRExpr {
     BFType type;
-    int line   = 0;
-    int column = 0;
+    int  line   = 0;
+    int  column = 0;
+    /// E.1: true when this expression evaluates to a compile-time constant
+    /// (literal, unary/binary of constants, or reference to a const variable).
+    bool isCompileTimeConstant = false;
     virtual ~HIRExpr() = default;
 };
 
@@ -58,6 +61,7 @@ struct HIRIntLit : HIRExpr {
     std::string raw;
     HIRIntLit(int64_t v, std::string r) : value(v), raw(std::move(r)) {
         type = BFType::makeInt();
+        isCompileTimeConstant = true;
     }
 };
 
@@ -66,6 +70,7 @@ struct HIRFloatLit : HIRExpr {
     std::string raw;
     HIRFloatLit(double v, std::string r) : value(v), raw(std::move(r)) {
         type = BFType::makeFloat();
+        isCompileTimeConstant = true;
     }
 };
 
@@ -73,6 +78,7 @@ struct HIRStringLit : HIRExpr {
     std::string value;
     explicit HIRStringLit(std::string v) : value(std::move(v)) {
         type = BFType::makeString();
+        isCompileTimeConstant = true;
     }
 };
 
@@ -80,6 +86,7 @@ struct HIRCharLit : HIRExpr {
     std::string value;
     explicit HIRCharLit(std::string v) : value(std::move(v)) {
         type = BFType::makeChar();
+        isCompileTimeConstant = true;
     }
 };
 
@@ -87,11 +94,15 @@ struct HIRBoolLit : HIRExpr {
     bool value;
     explicit HIRBoolLit(bool v) : value(v) {
         type = BFType::makeBool();
+        isCompileTimeConstant = true;
     }
 };
 
+/// E.3: Null literal.  Carries the nullable type from context when known,
+/// otherwise falls back to Unknown (compatible with any nullable).
 struct HIRNullLit : HIRExpr {
-    HIRNullLit() { type = BFType::makeUnknown(); }
+    HIRNullLit() { type = BFType::makeUnknown(); isCompileTimeConstant = true; }
+    explicit HIRNullLit(BFType t) { type = std::move(t); isCompileTimeConstant = true; }
 };
 
 /// A variable reference: resolves to its declared type.
@@ -198,7 +209,8 @@ struct HIRBlock {
 struct HIRVarDecl : HIRStmt {
     std::string name;
     BFType      bfType;
-    HIRExprPtr  init;   // may be null for default-initialised vars
+    HIRExprPtr  init;          // may be null for default-initialised vars
+    bool        isConstant = false;  // E.2: propagated from VarDeclStmt
     HIRVarDecl(std::string n, BFType t, HIRExprPtr i)
         : name(std::move(n)), bfType(std::move(t)), init(std::move(i)) {}
 };
@@ -246,8 +258,7 @@ struct HIRFor : HIRStmt {
 struct HIRForIn : HIRStmt {
     std::string varName;
     BFType      varType;
-    HIRExprPtr  rangeStart;
-    HIRExprPtr  rangeEnd;
+    HIRExprPtr  range;  // Phase 3: Single range field instead of rangeStart/rangeEnd
     HIRBlock    body;
 };
 
@@ -287,6 +298,8 @@ struct HIRFunction {
 struct HIRStructField {
     std::string name;
     BFType      type;
+    bool        isReadonly = false;  // E.3: propagated from StructMember
+    bool        isConstant = false;  // E.3: propagated from StructMember
 };
 
 struct HIRStruct {

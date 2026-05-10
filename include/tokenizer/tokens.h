@@ -51,6 +51,8 @@ enum class TokenType {
 	AS_TOKEN,
 	OVERRIDDEN_TOKEN,
 	ENUM_TOKEN,
+	CONST_TOKEN,        // Phase 3: const keyword
+	READONLY_TOKEN,     // Phase 3: readonly keyword
 
 	// Arithmetic operators
 	PLUS_TOKEN,		 // +
@@ -108,6 +110,8 @@ enum class TokenType {
 	ARROW_TOKEN,		  // =>
 	UNDERSCORE_TOKEN,	  // _ (wildcard in match)
 	DOTDOT_TOKEN,		  // .. (range)
+	QUESTION_TOKEN,       // ? (for nullable types T?)
+	QUESTION_DOT_TOKEN,   // ?. (for null-safe access)
 };
 
 const char* tokenTypeToString(TokenType type);

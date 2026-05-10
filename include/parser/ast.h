@@ -13,6 +13,7 @@ struct Statement;
 struct TypeNode {
 	std::string name;  // "int", "float", "bool", "char", "string", "void", or user-defined
 	std::vector<std::unique_ptr<TypeNode>> typeParams;	// for array<T>, map<K,V>, slice<T>
+	bool isNullable = false;  // Phase 3: for T? syntax (sugar for Option<T>)
 
 	TypeNode() = default;
 	TypeNode(const std::string& name) : name(name) {
@@ -65,6 +66,17 @@ struct BoolLiteralExpr : Expression {
 };
 
 struct NullLiteralExpr : Expression {};
+
+// Phase 3: Null-safe access expression: obj?.field : fallback
+// Represents: if obj is not null, access .field; otherwise use fallback value
+struct NullSafeAccessExpr : Expression {
+	ExprPtr object;      // the nullable object (may be chained)
+	std::string field;   // the field to access
+	ExprPtr fallback;    // value if object (or any in chain) is null
+	NullSafeAccessExpr(ExprPtr obj, const std::string& fld, ExprPtr fb)
+		: object(std::move(obj)), field(fld), fallback(std::move(fb)) {
+	}
+};
 
 struct IdentifierExpr : Expression {
 	std::string name;
@@ -161,12 +173,13 @@ struct Block {
 	std::vector<StmtPtr> statements;
 };
 
-// Variable declaration: x: int = 5; or x := 5;
+// Variable declaration: x: int = 5; or x := 5; or const PI: float = 3.14;
 struct VarDeclStmt : Statement {
 	std::string name;
 	std::unique_ptr<TypeNode> type;	 // null for walrus := (inferred)
 	ExprPtr initializer;			 // may be null
 	bool isWalrus = false;
+	bool isConstant = false;  // Phase 3: true for const declarations
 	VarDeclStmt() = default;
 };
 
@@ -212,19 +225,20 @@ struct ForStmt : Statement {
 	Block body;
 };
 
-// For-in statement: for (i: int in [0..10]) { ... }
+// For-in statement: for (item in array) { ... } or for (item: Type in array) { ... }
+// Phase 3: Extended to support for-in loops with optional explicit type annotation
 struct ForInStmt : Statement {
 	std::string varName;
-	std::unique_ptr<TypeNode> varType;
-	ExprPtr rangeStart;
-	ExprPtr rangeEnd;
+	std::unique_ptr<TypeNode> varType;  // may be null (inferred from range)
+	ExprPtr range;  // expression that yields an iterable (array, etc.)
 	Block body;
 };
 
 // Match statement
 struct MatchCase {
-	std::vector<ExprPtr> patterns;	// multiple patterns joined by |
+	std::vector<ExprPtr> patterns;	// multiple patterns joined by |, or nullptr for null pattern
 	bool isDefault = false;			// _ => { ... }
+	bool isNullPattern = false;  // Phase 3: true for null => { ... }
 	Block body;
 };
 
@@ -266,6 +280,7 @@ struct ImportDecl {
 struct Parameter {
 	std::string name;
 	std::unique_ptr<TypeNode> type;
+	bool isReadonly = false;  // Phase 3: readonly modifier on parameters
 };
 
 struct FunctionDecl {
@@ -285,6 +300,8 @@ struct StructMember {
 	// For fields
 	std::string fieldName;
 	std::unique_ptr<TypeNode> fieldType;
+	bool isReadonly = false;  // Phase 3: readonly modifier on fields
+	bool isConstant = false;  // Phase 3: const modifier on fields
 	// For methods
 	std::unique_ptr<FunctionDecl> method;
 };

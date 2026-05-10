@@ -49,39 +49,44 @@ BFType TypeResolver::primitiveFor(const std::string& name) {
 
 BFType TypeResolver::resolve(const TypeNode& node) const {
 	const std::string& name = node.name;
+	BFType resolved = BFType::makeUnknown();
 
 	// Primitives
 	if (isPrimitive(name))
-		return primitiveFor(name);
+		resolved = primitiveFor(name);
 
 	// Nullable: T?  (represented via TypeNode name ending in '?' — future sugar)
 	// Kept for forward compatibility; parser does not emit this yet.
-	if (!name.empty() && name.back() == '?') {
+	else if (!name.empty() && name.back() == '?') {
 		std::string inner = name.substr(0, name.size() - 1);
 		TypeNode innerNode(inner);
-		return BFType::makeNullable(resolve(innerNode));
+		resolved = BFType::makeNullable(resolve(innerNode));
 	}
 
 	// array<T>
-	if (name == "array" && node.typeParams.size() == 1) {
+	else if (name == "array" && node.typeParams.size() == 1) {
 		BFType elem = resolve(*node.typeParams[0]);
-		return BFType::makeArray(std::move(elem));
+		resolved = BFType::makeArray(std::move(elem));
 	}
 
 	// map<K, V>
-	if (name == "map" && node.typeParams.size() == 2) {
+	else if (name == "map" && node.typeParams.size() == 2) {
 		BFType key = resolve(*node.typeParams[0]);
 		BFType val = resolve(*node.typeParams[1]);
-		return BFType::makeMap(std::move(key), std::move(val));
+		resolved = BFType::makeMap(std::move(key), std::move(val));
 	}
 
 	// Named user types
-	if (enumNames_.count(name))
-		return BFType::makeEnum(name);
-	if (structNames_.count(name))
-		return BFType::makeStruct(name);
+	else if (enumNames_.count(name))
+		resolved = BFType::makeEnum(name);
+	else if (structNames_.count(name))
+		resolved = BFType::makeStruct(name);
 
-	return BFType::makeUnknown();
+	if (node.isNullable && !resolved.isUnknown()) {
+		resolved = BFType::makeNullable(std::move(resolved));
+	}
+
+	return resolved;
 }
 
 }  // namespace bytefrost

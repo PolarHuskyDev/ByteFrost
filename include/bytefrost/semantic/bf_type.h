@@ -25,8 +25,8 @@ enum class BFTypeKind {
 	Array,  // array<T>
 	Map,    // map<K,V>
 
-	// Nullability (Phase 3 — scaffolded here for forward compatibility)
-	Nullable,  // T?
+	// Nullability (Phase 3)
+	Nullable,  // T? (sugar for Option<T>)
 
 	// Unresolved — used as a sentinel before resolution completes
 	Unknown,
@@ -35,13 +35,27 @@ enum class BFTypeKind {
 /// BFType is the ByteFrost semantic type representation.
 /// All instances should be treated as immutable once constructed.
 /// Use the static factory methods to build types.
+///
+/// Phase 3 Extensions:
+///   • nullable: true for T? (nullable type, sugar for Option<T>)
+///   • isCompileTimeConstant: marks values that can be evaluated at compile time
+///   • Note: Variables are mutable by default; only const declarations are immutable
 struct BFType {
 	BFTypeKind kind = BFTypeKind::Unknown;
+
+	/// True if this type can hold null (represented as kind==Nullable or this flag).
+	/// T? syntax creates a nullable type that defaults to null.
+	/// Non-nullable types default to zero value (0, 0.0, "", etc).
+	bool nullable = false;
+
+	/// True if this value is known to be a compile-time constant.
+	/// Used for const declarations and constant folding optimization.
+	bool isCompileTimeConstant = false;
 
 	/// Non-empty for Enum and Struct kinds (the declared name).
 	std::string name;
 
-	/// Element type: Array<elemType>, Nullable<innerType>.
+	/// Element type: Array<elemType>, Nullable<innerType>, Option<innerType>.
 	std::shared_ptr<BFType> elemType;
 
 	/// Key type for Map<keyType, valueType>.
@@ -96,8 +110,15 @@ struct BFType {
 	static BFType makeNullable(BFType inner) {
 		BFType t;
 		t.kind = BFTypeKind::Nullable;
+		t.nullable = true;
 		t.elemType = std::make_shared<BFType>(std::move(inner));
 		return t;
+	}
+
+	/// Make a type with Option<T> syntax (equivalent to T?, sugar for nullable).
+	/// Example: BFType::makeOption(BFType::makeInt())  // int?
+	static BFType makeOption(BFType inner) {
+		return makeNullable(std::move(inner));
 	}
 
 	// -----------------------------------------------------------------------
@@ -114,7 +135,7 @@ struct BFType {
 	bool isStruct()  const { return kind == BFTypeKind::Struct; }
 	bool isArray()   const { return kind == BFTypeKind::Array; }
 	bool isMap()     const { return kind == BFTypeKind::Map; }
-	bool isNullable() const { return kind == BFTypeKind::Nullable; }
+	bool isNullable() const { return kind == BFTypeKind::Nullable || nullable; }
 	bool isUnknown() const { return kind == BFTypeKind::Unknown; }
 
 	/// True for int or float.

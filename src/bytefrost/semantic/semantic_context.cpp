@@ -36,6 +36,8 @@ bool SemanticContext::analyze(const Program& program,
                               const std::string& sourceFile) {
 	sourceFile_ = sourceFile;
 	diag_.clear();
+	importedNames_.clear();
+	structFieldInfo_.clear();
 
 	// Pass 1: register all top-level names so forward references inside
 	// function bodies resolve correctly.
@@ -71,6 +73,26 @@ void SemanticContext::collectTopLevelDecls(const Program& program) {
 	for (const auto& sd : program.structs) {
 		resolver_.registerStruct(sd->name);
 	}
+	for (const auto& sd : program.structs) {
+		auto& fieldMap = structFieldInfo_[sd->name];
+		for (const auto& m : sd->members) {
+			if (m.kind != StructMember::FIELD || !m.fieldType)
+				continue;
+			FieldSemInfo fi;
+			fi.isReadonly = m.isReadonly;
+			fi.isConstant = m.isConstant;
+			fi.isNullable = m.fieldType->isNullable;
+			fi.type = resolver_.resolve(*m.fieldType);
+			// C.4: const fields cannot be nullable (parser also rejects this, but
+			// guard here too for robustness).
+			if (fi.isConstant && fi.isNullable) {
+				diag_.error(loc(sd->line, sd->column),
+				            "const field '" + m.fieldName + "' in struct '" +
+				                sd->name + "' cannot be nullable");
+			}
+			fieldMap[m.fieldName] = std::move(fi);
+		}
+	}
 	// Collect local names brought in by import statements.  We can't know
 	// whether they're enums, structs, or functions without loading the imported
 	// module, so we just record the names to suppress false-positive errors.
@@ -86,8 +108,7 @@ void SemanticContext::collectTopLevelDecls(const Program& program) {
 			continue;  // duplicates reported separately
 		BFType retType = fn->returnType ? resolver_.resolve(*fn->returnType)
 		                               : BFType::makeVoid();
-		scopes_.declare(fn->name, {fn->name, retType, true, false,
-		                           loc(fn->line, fn->column)});
+		scopes_.declare(fn->name, {fn->name, retType, false, ConstInitState::Uninitialized,		                           loc(fn->line, fn->column)});
 	}
 }
 
@@ -321,12 +342,16 @@ void SemanticContext::analyzeStructMethods(const Program& program) {
 
 void SemanticContext::analyzeFunction(const FunctionDecl& fn,
                                       const std::string& thisTypeName) {
+	const std::string prevFunctionName = currentFunctionName_;
+	const std::string prevThisTypeName = currentThisTypeName_;
+	currentFunctionName_ = fn.name;
+	currentThisTypeName_ = thisTypeName;
+
 	scopes_.pushScope();
 
 	// Inject 'this' for methods.
 	if (!thisTypeName.empty()) {
-		scopes_.declare("this", {"this", BFType::makeStruct(thisTypeName),
-		                         false, false, {}});
+		scopes_.declare("this", {"this", BFType::makeStruct(thisTypeName), false, ConstInitState::Uninitialized, {}});
 	}
 
 	// Declare parameters.
@@ -339,12 +364,14 @@ void SemanticContext::analyzeFunction(const FunctionDecl& fn,
 			            "unknown type '" + param.type->name +
 			                "' for parameter '" + param.name + "'");
 		}
-		scopes_.declare(param.name, {param.name, pType, true, false,
-		                             loc(fn.line, fn.column)});
+		scopes_.declare(param.name, {param.name, pType, false, ConstInitState::Uninitialized,		                             loc(fn.line, fn.column)});
 	}
 
 	analyzeBlock(fn.body);
 	scopes_.popScope();
+
+	currentFunctionName_ = prevFunctionName;
+	currentThisTypeName_ = prevThisTypeName;
 }
 
 void SemanticContext::analyzeBlock(const Block& block) {
@@ -375,11 +402,19 @@ void SemanticContext::analyzeStatement(const Statement& stmt) {
 				            "unknown type '" + s->type->name + "'");
 			}
 			// Check initializer is compatible with declared type.
-			if (s->initializer && !initType.isUnknown() && !declType.isUnknown()) {
-				if (!checker_.isAssignable(initType, declType)) {
+			if (s->initializer && !declType.isUnknown()) {
+				if (dynamic_cast<const NullLiteralExpr*>(s->initializer.get()) && !declType.isNullable()) {
+					diag_.error(loc(s->line, s->column),
+					            "cannot assign null to non-nullable type '" + declType.toString() + "'");
+				} else if (!initType.isUnknown() && !checker_.isAssignable(initType, declType)) {
 					diag_.error(loc(s->line, s->column),
 					            "cannot assign value of type '" + initType.toString() +
 					                "' to variable of type '" + declType.toString() + "'");
+				}
+				// C.1: Validate struct literal completeness.
+				if (declType.isStruct()) {
+					if (auto* si = dynamic_cast<const StructInitExpr*>(s->initializer.get()))
+						checkStructInit(declType.name, *si, s->line, s->column);
 				}
 			}
 		} else {
@@ -387,25 +422,91 @@ void SemanticContext::analyzeStatement(const Statement& stmt) {
 			declType = initType;
 		}
 
+		if (s->isConstant) {
+			if (declType.isNullable()) {
+				diag_.error(loc(s->line, s->column),
+				            "const declarations cannot have nullable type");
+			}
+			if (s->initializer && !isCompileTimeConstantExpr(*s->initializer)) {
+				diag_.error(loc(s->line, s->column),
+				            "const initializer is not a compile-time constant");
+			}
+		}
+
 		// Check for shadowing in the same scope.
 		if (scopes_.isDeclaredInCurrentScope(s->name)) {
 			diag_.error(loc(s->line, s->column),
 			            "variable '" + s->name + "' already declared in this scope");
 		} else {
-			scopes_.declare(s->name, {s->name, declType, true, false,
+			ConstInitState initState = (s->isConstant && s->initializer)
+			                        ? ConstInitState::InitializedOnce
+			                        : ConstInitState::Uninitialized;
+			scopes_.declare(s->name, {s->name, declType, s->isConstant, initState,
 			                          loc(s->line, s->column)});
 		}
 		return;
 	}
 
 	if (auto* s = dynamic_cast<const AssignStmt*>(&stmt)) {
+		if (auto* id = dynamic_cast<const IdentifierExpr*>(s->target.get())) {
+			if (auto* sym = scopes_.lookupMutable(id->name); sym && sym->isConstant) {
+				if (s->op != "=") {
+					diag_.error(loc(s->line, s->column),
+					            "cannot apply assignment operator '" + s->op +
+					                "' to constant '" + id->name + "'");
+				} else if (sym->constInitState == ConstInitState::InitializedOnce) {
+					diag_.error(loc(s->line, s->column),
+					            "cannot reassign constant '" + id->name + "'");
+				} else {
+					if (!isCompileTimeConstantExpr(*s->value)) {
+						diag_.error(loc(s->line, s->column),
+						            "const initializer is not a compile-time constant");
+					}
+					sym->constInitState = ConstInitState::InitializedOnce;
+				}
+			}
+		}
+
+		if (auto* ma = dynamic_cast<const MemberAccessExpr*>(s->target.get())) {
+			BFType objType = analyzeExpression(*ma->object);
+			if (objType.isStruct()) {
+				auto sit = structFieldInfo_.find(objType.name);
+				if (sit != structFieldInfo_.end()) {
+					auto fit = sit->second.find(ma->member);
+					if (fit != sit->second.end()) {
+						const bool isThisFieldAssign = dynamic_cast<const ThisExpr*>(ma->object.get()) != nullptr;
+						const bool isOwningCtor = currentFunctionName_ == "constructor" &&
+						                         !currentThisTypeName_.empty() &&
+						                         currentThisTypeName_ == objType.name;
+						const bool allowReadonlyInit = s->op == "=" && isThisFieldAssign && isOwningCtor;
+						if (fit->second.isConstant) {
+							diag_.error(loc(s->line, s->column),
+							            "cannot assign to const field '" + ma->member + "'");
+						}
+						if (fit->second.isReadonly && !allowReadonlyInit) {
+							diag_.error(loc(s->line, s->column),
+							            "cannot assign to readonly field '" + ma->member + "'");
+						}
+					}
+				}
+			}
+		}
+
 		BFType rhs = analyzeExpression(*s->value);
 		BFType lhs = analyzeExpression(*s->target);
-		if (!lhs.isUnknown() && !rhs.isUnknown()) {
-			if (!checker_.isAssignable(rhs, lhs)) {
+		if (!lhs.isUnknown()) {
+			if (dynamic_cast<const NullLiteralExpr*>(s->value.get()) && !lhs.isNullable()) {
+				diag_.error(loc(s->line, s->column),
+				            "cannot assign null to non-nullable type '" + lhs.toString() + "'");
+			} else if (!rhs.isUnknown() && !checker_.isAssignable(rhs, lhs)) {
 				diag_.error(loc(s->line, s->column),
 				            "cannot assign '" + rhs.toString() + "' to '" +
 				                lhs.toString() + "'");
+			}
+			// C.1: Validate struct literal completeness on assignment.
+			if (lhs.isStruct()) {
+				if (auto* si = dynamic_cast<const StructInitExpr*>(s->value.get()))
+					checkStructInit(lhs.name, *si, s->line, s->column);
 			}
 		}
 		return;
@@ -413,11 +514,51 @@ void SemanticContext::analyzeStatement(const Statement& stmt) {
 
 	if (auto* s = dynamic_cast<const IfStmt*>(&stmt)) {
 		BFType cond = analyzeExpression(*s->condition);
-		if (!cond.isUnknown() && !cond.isBool()) {
+		// Nullable types are allowed as truthy/falsy conditions (non-null ⇒ true).
+		if (!cond.isUnknown() && !cond.isBool() && !cond.isNullable()) {
 			diag_.error(loc(s->line, s->column),
 			            "if condition must be bool, got '" + cond.toString() + "'");
 		}
-		analyzeBlock(s->thenBlock);
+
+		// D.4: Null-narrowing — detect patterns like `x != null`, `x == null`,
+		// or just `x` (truthy check on a nullable).  Within the appropriate
+		// block, shadow the variable with its non-nullable type so member
+		// access etc. resolves correctly.
+		std::string narrowVar;
+		BFType      narrowedType;
+		bool        narrowInThen = false;
+		bool        hasNarrowing = false;
+
+		auto tryNarrow = [&](const std::string& name, bool inThen) {
+			const auto* sym = scopes_.lookup(name);
+			if (sym && sym->type.isNullable() && sym->type.elemType) {
+				narrowVar    = name;
+				narrowedType = *sym->type.elemType;
+				narrowInThen = inThen;
+				hasNarrowing = true;
+			}
+		};
+
+		if (auto* bin = dynamic_cast<const BinaryExpr*>(s->condition.get())) {
+			if (bin->op == "!=" || bin->op == "==") {
+				if (auto* id = dynamic_cast<const IdentifierExpr*>(bin->left.get()))
+					if (dynamic_cast<const NullLiteralExpr*>(bin->right.get()))
+						tryNarrow(id->name, bin->op == "!=");
+				if (!hasNarrowing)
+					if (auto* id = dynamic_cast<const IdentifierExpr*>(bin->right.get()))
+						if (dynamic_cast<const NullLiteralExpr*>(bin->left.get()))
+							tryNarrow(id->name, bin->op == "!=");
+			}
+		} else if (auto* id = dynamic_cast<const IdentifierExpr*>(s->condition.get())) {
+			tryNarrow(id->name, /*inThen=*/true);
+		}
+
+		// Analyse then-block (with narrowed type if applicable).
+		if (hasNarrowing && narrowInThen)
+			analyzeBlockWithNarrowing(s->thenBlock, narrowVar, narrowedType);
+		else
+			analyzeBlock(s->thenBlock);
+
 		for (const auto& [eicond, eibody] : s->elseIfBlocks) {
 			BFType eiType = analyzeExpression(*eicond);
 			if (!eiType.isUnknown() && !eiType.isBool()) {
@@ -426,7 +567,14 @@ void SemanticContext::analyzeStatement(const Statement& stmt) {
 			}
 			analyzeBlock(eibody);
 		}
-		if (s->elseBlock) analyzeBlock(*s->elseBlock);
+
+		// Analyse else-block (with narrowed type for `== null` case).
+		if (s->elseBlock) {
+			if (hasNarrowing && !narrowInThen)
+				analyzeBlockWithNarrowing(*s->elseBlock, narrowVar, narrowedType);
+			else
+				analyzeBlock(*s->elseBlock);
+		}
 		return;
 	}
 
@@ -452,12 +600,33 @@ void SemanticContext::analyzeStatement(const Statement& stmt) {
 
 	if (auto* s = dynamic_cast<const ForInStmt*>(&stmt)) {
 		scopes_.pushScope();
-		BFType varType = s->varType ? resolver_.resolve(*s->varType)
-		                            : BFType::makeInt();
-		scopes_.declare(s->varName, {s->varName, varType, true, false,
-		                             loc(s->line, s->column)});
-		if (s->rangeStart) analyzeExpression(*s->rangeStart);
-		if (s->rangeEnd)   analyzeExpression(*s->rangeEnd);
+		BFType rangeType = BFType::makeUnknown();
+		if (s->range)
+			rangeType = analyzeExpression(*s->range);
+
+		if (!rangeType.isUnknown() && !rangeType.isArray() && !rangeType.isMap()) {
+			diag_.error(loc(s->line, s->column),
+			            "for-in range must be iterable (array/map), got '" +
+			                rangeType.toString() + "'");
+		}
+
+		BFType inferredType = BFType::makeUnknown();
+		if (rangeType.isArray() && rangeType.elemType)
+			inferredType = *rangeType.elemType;
+		else if (rangeType.isMap() && rangeType.valueType)
+			inferredType = *rangeType.valueType;
+
+		BFType varType = s->varType ? resolver_.resolve(*s->varType) : inferredType;
+		if (varType.isUnknown())
+			varType = BFType::makeInt();
+
+		if (s->varType && !inferredType.isUnknown() && !checker_.isAssignable(inferredType, varType)) {
+			diag_.error(loc(s->line, s->column),
+			            "for-in variable type '" + varType.toString() +
+			                "' is incompatible with iterable element type '" + inferredType.toString() + "'");
+		}
+
+		scopes_.declare(s->varName, {s->varName, varType, false, ConstInitState::Uninitialized,		                             loc(s->line, s->column)});
 		analyzeBlock(s->body);
 		scopes_.popScope();
 		return;
@@ -543,6 +712,8 @@ BFType SemanticContext::analyzeExpression(const Expression& expr) {
 		return analyzeCall(*e);
 	if (auto* e = dynamic_cast<const MemberAccessExpr*>(&expr))
 		return analyzeMemberAccess(*e);
+	if (auto* e = dynamic_cast<const NullSafeAccessExpr*>(&expr))
+		return analyzeNullSafeAccess(*e);
 	if (auto* e = dynamic_cast<const IndexExpr*>(&expr))
 		return analyzeIndex(*e);
 
@@ -640,16 +811,94 @@ BFType SemanticContext::analyzeMemberAccess(const MemberAccessExpr& expr) {
 	if (obj.isEnum())
 		return BFType::makeEnum(obj.name);
 
-	// Struct field access: the struct type table isn't mirrored in the semantic
-	// layer yet (that is Phase 2 / HIR work).  Return unknown conservatively.
-	if (obj.isStruct())
+	// Struct field access.
+	if (obj.isStruct()) {
+		auto sit = structFieldInfo_.find(obj.name);
+		if (sit != structFieldInfo_.end()) {
+			auto fit = sit->second.find(expr.member);
+			if (fit != sit->second.end())
+				return fit->second.type;
+		}
 		return BFType::makeUnknown();
+	}
 
 	// Array built-in members: arr.length() → int (caller wraps in CallExpr)
 	if (obj.isArray())
 		return BFType::makeUnknown();
 
 	return BFType::makeUnknown();
+}
+
+BFType SemanticContext::analyzeNullSafeAccess(const NullSafeAccessExpr& expr) {
+	BFType objType = analyzeExpression(*expr.object);
+	if (!objType.isUnknown() && !objType.isNullable()) {
+		diag_.error(loc(expr.line, expr.column),
+		            "null-safe access requires nullable object, got '" + objType.toString() + "'");
+	}
+
+	BFType fallbackType = analyzeExpression(*expr.fallback);
+
+	if (objType.isNullable() && objType.elemType && objType.elemType->isStruct()) {
+		const std::string& structName = objType.elemType->name;
+		auto sit = structFieldInfo_.find(structName);
+		if (sit != structFieldInfo_.end()) {
+			auto fit = sit->second.find(expr.field);
+			if (fit == sit->second.end()) {
+				diag_.error(loc(expr.line, expr.column),
+				            "unknown field '" + expr.field + "' on struct '" + structName + "'");
+				return BFType::makeUnknown();
+			}
+
+			const BFType& fieldType = fit->second.type;
+			if (!fallbackType.isUnknown() && !fieldType.isUnknown()
+			    && !checker_.isAssignable(fallbackType, fieldType)) {
+				diag_.error(loc(expr.line, expr.column),
+				            "null-safe fallback type '" + fallbackType.toString() +
+				                "' is incompatible with field type '" + fieldType.toString() + "'");
+			}
+			return fieldType;
+		}
+	}
+
+	return fallbackType.isUnknown() ? BFType::makeUnknown() : fallbackType;
+}
+
+bool SemanticContext::isCompileTimeConstantExpr(const Expression& expr) const {
+	if (dynamic_cast<const IntLiteralExpr*>(&expr)
+	    || dynamic_cast<const FloatLiteralExpr*>(&expr)
+	    || dynamic_cast<const StringLiteralExpr*>(&expr)
+	    || dynamic_cast<const BoolLiteralExpr*>(&expr)
+	    || dynamic_cast<const CharLiteralExpr*>(&expr)
+	    || dynamic_cast<const NullLiteralExpr*>(&expr)) {
+		return true;
+	}
+
+	if (auto* u = dynamic_cast<const UnaryExpr*>(&expr))
+		return isCompileTimeConstantExpr(*u->operand);
+
+	if (auto* b = dynamic_cast<const BinaryExpr*>(&expr))
+		return isCompileTimeConstantExpr(*b->left) && isCompileTimeConstantExpr(*b->right);
+
+	if (auto* a = dynamic_cast<const ArrayLiteralExpr*>(&expr)) {
+		for (const auto& e : a->elements)
+			if (!isCompileTimeConstantExpr(*e))
+				return false;
+		return true;
+	}
+
+	if (auto* s = dynamic_cast<const StructInitExpr*>(&expr)) {
+		for (const auto& [_, e] : s->fields)
+			if (!isCompileTimeConstantExpr(*e))
+				return false;
+		return true;
+	}
+
+	if (auto* id = dynamic_cast<const IdentifierExpr*>(&expr)) {
+		const auto* sym = scopes_.lookup(id->name);
+		return sym && sym->isConstant && sym->constInitState == ConstInitState::InitializedOnce;
+	}
+
+	return false;
 }
 
 BFType SemanticContext::analyzeIndex(const IndexExpr& expr) {
@@ -663,6 +912,57 @@ BFType SemanticContext::analyzeIndex(const IndexExpr& expr) {
 		return *obj.valueType;
 
 	return BFType::makeUnknown();
+}
+
+// -----------------------------------------------------------------------
+// C.1: checkStructInit
+// -----------------------------------------------------------------------
+
+void SemanticContext::checkStructInit(const std::string& structName,
+                                      const StructInitExpr& initExpr,
+                                      int line, int col) {
+	auto sit = structFieldInfo_.find(structName);
+	if (sit == structFieldInfo_.end())
+		return;  // unknown struct — error reported elsewhere
+
+	// Collect provided field names.
+	std::unordered_set<std::string> provided;
+	for (const auto& [fname, _] : initExpr.fields)
+		provided.insert(fname);
+
+	// Report unknown fields first.
+	for (const auto& [fname, _] : initExpr.fields) {
+		if (!sit->second.count(fname)) {
+			diag_.error(loc(line, col),
+			            "unknown field '" + fname + "' in struct '" + structName + "'");
+		}
+	}
+
+	// Every non-nullable field must be present.
+	for (const auto& [fname, finfo] : sit->second) {
+		if (!finfo.isNullable && !provided.count(fname)) {
+			diag_.error(loc(line, col),
+			            "non-nullable field '" + fname + "' of struct '" + structName +
+			                "' must be initialized in struct literal");
+		}
+	}
+}
+
+// -----------------------------------------------------------------------
+// D.4: analyzeBlockWithNarrowing
+// -----------------------------------------------------------------------
+
+void SemanticContext::analyzeBlockWithNarrowing(const Block& block,
+                                                 const std::string& varName,
+                                                 const BFType& narrowedType) {
+	scopes_.pushScope();
+	// Shadow the nullable variable with its narrowed (non-nullable) type so
+	// that code inside this block can access it without null-safety noise.
+	scopes_.declare(varName,
+	                {varName, narrowedType, false, ConstInitState::Uninitialized, {}});
+	for (const auto& stmt : block.statements)
+		analyzeStatement(*stmt);
+	scopes_.popScope();
 }
 
 // -----------------------------------------------------------------------

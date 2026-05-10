@@ -1397,3 +1397,445 @@ TEST(ParserEnum, StructWithEnumFields) {
 	ASSERT_EQ(program.structs[0]->members.size(), 1u);
 	EXPECT_EQ(program.structs[0]->members[0].fieldType->name, "Suit");
 }
+
+// ============================================================
+// Phase 3: Const Declarations
+// ============================================================
+
+TEST(ParserPhase3, ConstDeclarationWithInitializer) {
+	auto program = parse(R"(
+	main(): int {
+		const PI: float = 3.14159;
+		return 0;
+	}
+	)");
+	ASSERT_EQ(program.functions.size(), 1u);
+	auto& fn = program.functions[0];
+	ASSERT_EQ(fn->body.statements.size(), 2u);
+	
+	auto* constDecl = dynamic_cast<VarDeclStmt*>(fn->body.statements[0].get());
+	ASSERT_NE(constDecl, nullptr);
+	EXPECT_EQ(constDecl->name, "PI");
+	EXPECT_TRUE(constDecl->isConstant);
+	EXPECT_EQ(constDecl->type->name, "float");
+}
+
+TEST(ParserPhase3, ConstDeclarationWithoutInitializer) {
+	auto program = parse(R"(
+	main(): int {
+		const X: int;
+		return 0;
+	}
+	)");
+	ASSERT_EQ(program.functions.size(), 1u);
+	auto& fn = program.functions[0];
+	ASSERT_EQ(fn->body.statements.size(), 2u);
+	
+	auto* constDecl = dynamic_cast<VarDeclStmt*>(fn->body.statements[0].get());
+	ASSERT_NE(constDecl, nullptr);
+	EXPECT_EQ(constDecl->name, "X");
+	EXPECT_TRUE(constDecl->isConstant);
+	EXPECT_FALSE(constDecl->initializer);
+}
+
+TEST(ParserPhase3, RegularVarDeclaration) {
+	auto program = parse(R"(
+	main(): int {
+		x: int = 10;
+		return 0;
+	}
+	)");
+	ASSERT_EQ(program.functions.size(), 1u);
+	auto& fn = program.functions[0];
+	ASSERT_EQ(fn->body.statements.size(), 2u);
+	
+	auto* varDecl = dynamic_cast<VarDeclStmt*>(fn->body.statements[0].get());
+	ASSERT_NE(varDecl, nullptr);
+	EXPECT_EQ(varDecl->name, "x");
+	EXPECT_FALSE(varDecl->isConstant);
+}
+
+TEST(ParserPhase3, MultipleConstDeclarations) {
+	auto program = parse(R"(
+	main(): int {
+		const PI: float = 3.14;
+		const E: float = 2.71;
+		const MAX_SIZE: int = 100;
+		return 0;
+	}
+	)");
+	ASSERT_EQ(program.functions.size(), 1u);
+	auto& fn = program.functions[0];
+	ASSERT_EQ(fn->body.statements.size(), 4u);
+	
+	// Check all three are const
+	for (int i = 0; i < 3; ++i) {
+		auto* decl = dynamic_cast<VarDeclStmt*>(fn->body.statements[i].get());
+		ASSERT_NE(decl, nullptr);
+		EXPECT_TRUE(decl->isConstant);
+	}
+}
+
+// ============================================================
+// Phase 3: Nullable Types
+// ============================================================
+
+TEST(ParserPhase3, NullableIntType) {
+	auto program = parse(R"(
+	main(): int {
+		x: int? = null;
+		return 0;
+	}
+	)");
+	ASSERT_EQ(program.functions.size(), 1u);
+	auto& fn = program.functions[0];
+	ASSERT_EQ(fn->body.statements.size(), 2u);
+	
+	auto* varDecl = dynamic_cast<VarDeclStmt*>(fn->body.statements[0].get());
+	ASSERT_NE(varDecl, nullptr);
+	EXPECT_TRUE(varDecl->type->isNullable);
+	EXPECT_EQ(varDecl->type->name, "int");
+}
+
+TEST(ParserPhase3, NullableFloatType) {
+	auto program = parse(R"(
+	main(): int {
+		y: float?;
+		return 0;
+	}
+	)");
+	ASSERT_EQ(program.functions.size(), 1u);
+	auto& fn = program.functions[0];
+	auto* varDecl = dynamic_cast<VarDeclStmt*>(fn->body.statements[0].get());
+	ASSERT_NE(varDecl, nullptr);
+	EXPECT_TRUE(varDecl->type->isNullable);
+	EXPECT_EQ(varDecl->type->name, "float");
+}
+
+TEST(ParserPhase3, NullableStringType) {
+	auto program = parse(R"(
+	main(): int {
+		name: string?;
+		return 0;
+	}
+	)");
+	ASSERT_EQ(program.functions.size(), 1u);
+	auto& fn = program.functions[0];
+	auto* varDecl = dynamic_cast<VarDeclStmt*>(fn->body.statements[0].get());
+	ASSERT_NE(varDecl, nullptr);
+	EXPECT_TRUE(varDecl->type->isNullable);
+	EXPECT_EQ(varDecl->type->name, "string");
+}
+
+TEST(ParserPhase3, NonNullableTypeDefault) {
+	auto program = parse(R"(
+	main(): int {
+		x: int;
+		return 0;
+	}
+	)");
+	ASSERT_EQ(program.functions.size(), 1u);
+	auto& fn = program.functions[0];
+	auto* varDecl = dynamic_cast<VarDeclStmt*>(fn->body.statements[0].get());
+	ASSERT_NE(varDecl, nullptr);
+	EXPECT_FALSE(varDecl->type->isNullable);
+}
+
+TEST(ParserPhase3, NullableArrayType) {
+	auto program = parse(R"(
+	main(): int {
+		items: array<int>?;
+		return 0;
+	}
+	)");
+	ASSERT_EQ(program.functions.size(), 1u);
+	auto& fn = program.functions[0];
+	auto* varDecl = dynamic_cast<VarDeclStmt*>(fn->body.statements[0].get());
+	ASSERT_NE(varDecl, nullptr);
+	EXPECT_TRUE(varDecl->type->isNullable);
+	EXPECT_EQ(varDecl->type->name, "array");
+	ASSERT_EQ(varDecl->type->typeParams.size(), 1u);
+	EXPECT_EQ(varDecl->type->typeParams[0]->name, "int");
+}
+
+// ============================================================
+// Phase 3: Readonly Modifiers
+// ============================================================
+
+TEST(ParserPhase3, ReadonlyStructField) {
+	auto program = parse(R"(
+	struct Config {
+		readonly dbHost: string;
+		port: int;
+	}
+	main(): int { return 0; }
+	)");
+	ASSERT_EQ(program.structs.size(), 1u);
+	auto& s = program.structs[0];
+	ASSERT_EQ(s->members.size(), 2u);
+	
+	EXPECT_TRUE(s->members[0].isReadonly);
+	EXPECT_EQ(s->members[0].fieldName, "dbHost");
+	
+	EXPECT_FALSE(s->members[1].isReadonly);
+	EXPECT_EQ(s->members[1].fieldName, "port");
+}
+
+TEST(ParserPhase3, ConstStructField) {
+	auto program = parse(R"(
+	struct Constants {
+		const MAX_VALUE: int;
+		value: int;
+	}
+	main(): int { return 0; }
+	)");
+	ASSERT_EQ(program.structs.size(), 1u);
+	auto& s = program.structs[0];
+	ASSERT_EQ(s->members.size(), 2u);
+	
+	EXPECT_TRUE(s->members[0].isConstant);
+	EXPECT_EQ(s->members[0].fieldName, "MAX_VALUE");
+	
+	EXPECT_FALSE(s->members[1].isConstant);
+}
+
+TEST(ParserPhase3, ReadonlyAndConstStructFields) {
+	auto program = parse(R"(
+	struct MixedFields {
+		readonly name: string;
+		const VERSION: float;
+		mutable_field: int;
+	}
+	main(): int { return 0; }
+	)");
+	ASSERT_EQ(program.structs.size(), 1u);
+	auto& s = program.structs[0];
+	ASSERT_EQ(s->members.size(), 3u);
+	
+	EXPECT_TRUE(s->members[0].isReadonly);
+	EXPECT_FALSE(s->members[0].isConstant);
+	
+	EXPECT_FALSE(s->members[1].isReadonly);
+	EXPECT_TRUE(s->members[1].isConstant);
+	
+	EXPECT_FALSE(s->members[2].isReadonly);
+	EXPECT_FALSE(s->members[2].isConstant);
+}
+
+TEST(ParserPhase3, ReadonlyParameter) {
+	auto program = parse(R"(
+	process(readonly name: string, age: int): void {
+	}
+	main(): int { return 0; }
+	)");
+	ASSERT_EQ(program.functions.size(), 2u);
+	FunctionDecl* fn = nullptr;
+	for (auto& f : program.functions) {
+		if (f->name == "process") {
+			fn = f.get();
+			break;
+		}
+	}
+	ASSERT_NE(fn, nullptr);
+	ASSERT_EQ(fn->params.size(), 2u);
+	
+	EXPECT_TRUE(fn->params[0].isReadonly);
+	EXPECT_EQ(fn->params[0].name, "name");
+	
+	EXPECT_FALSE(fn->params[1].isReadonly);
+	EXPECT_EQ(fn->params[1].name, "age");
+}
+
+// ============================================================
+// Phase 3: For-in Loops
+// ============================================================
+
+TEST(ParserPhase3, ForInLoopSimple) {
+	auto program = parse(R"(
+	main(): int {
+		for (item in items) {
+			print(item);
+		}
+		return 0;
+	}
+	)");
+	ASSERT_EQ(program.functions.size(), 1u);
+	auto& fn = program.functions[0];
+	ASSERT_EQ(fn->body.statements.size(), 2u);
+	
+	auto* forIn = dynamic_cast<ForInStmt*>(fn->body.statements[0].get());
+	ASSERT_NE(forIn, nullptr);
+	EXPECT_EQ(forIn->varName, "item");
+	EXPECT_EQ(forIn->varType, nullptr);  // No explicit type
+	ASSERT_NE(forIn->range, nullptr);    // Has range expression
+}
+
+TEST(ParserPhase3, ForInLoopWithType) {
+	auto program = parse(R"(
+	main(): int {
+		for (x: int in numbers) {
+			print(x);
+		}
+		return 0;
+	}
+	)");
+	ASSERT_EQ(program.functions.size(), 1u);
+	auto& fn = program.functions[0];
+	ASSERT_EQ(fn->body.statements.size(), 2u);
+	
+	auto* forIn = dynamic_cast<ForInStmt*>(fn->body.statements[0].get());
+	ASSERT_NE(forIn, nullptr);
+	EXPECT_EQ(forIn->varName, "x");
+	ASSERT_NE(forIn->varType, nullptr);
+	EXPECT_EQ(forIn->varType->name, "int");
+	ASSERT_NE(forIn->range, nullptr);
+}
+
+TEST(ParserPhase3, CStyleForLoopStillWorks) {
+	auto program = parse(R"(
+	main(): int {
+		for (i := 0; i < 10; i++) {
+			print(i);
+		}
+		return 0;
+	}
+	)");
+	ASSERT_EQ(program.functions.size(), 1u);
+	auto& fn = program.functions[0];
+	ASSERT_EQ(fn->body.statements.size(), 2u);
+	
+	auto* cfor = dynamic_cast<ForStmt*>(fn->body.statements[0].get());
+	ASSERT_NE(cfor, nullptr);
+	ASSERT_NE(cfor->init, nullptr);
+	ASSERT_NE(cfor->condition, nullptr);
+	ASSERT_NE(cfor->update, nullptr);
+}
+
+// ============================================================
+// Phase 3: Null-Safe Access
+// ============================================================
+
+TEST(ParserPhase3, NullSafeAccessWithQuestionDotToken) {
+	auto program = parse(R"(
+	main(): int {
+		name: string = user?.name : "Unknown";
+		return 0;
+	}
+	)");
+	ASSERT_EQ(program.functions.size(), 1u);
+	auto& fn = program.functions[0];
+	ASSERT_EQ(fn->body.statements.size(), 2u);
+
+	auto* varDecl = dynamic_cast<VarDeclStmt*>(fn->body.statements[0].get());
+	ASSERT_NE(varDecl, nullptr);
+	auto* nullSafe = dynamic_cast<NullSafeAccessExpr*>(varDecl->initializer.get());
+	ASSERT_NE(nullSafe, nullptr);
+
+	auto* obj = dynamic_cast<IdentifierExpr*>(nullSafe->object.get());
+	ASSERT_NE(obj, nullptr);
+	EXPECT_EQ(obj->name, "user");
+	EXPECT_EQ(nullSafe->field, "name");
+
+	auto* fallback = dynamic_cast<StringLiteralExpr*>(nullSafe->fallback.get());
+	ASSERT_NE(fallback, nullptr);
+	EXPECT_EQ(fallback->value, "Unknown");
+}
+
+TEST(ParserPhase3, NullSafeAccessWithQuestionDotSeparated) {
+	auto program = parse(R"(
+	main(): int {
+		name: string = user? .name : "Unknown";
+		return 0;
+	}
+	)");
+	ASSERT_EQ(program.functions.size(), 1u);
+	auto& fn = program.functions[0];
+	ASSERT_EQ(fn->body.statements.size(), 2u);
+
+	auto* varDecl = dynamic_cast<VarDeclStmt*>(fn->body.statements[0].get());
+	ASSERT_NE(varDecl, nullptr);
+	auto* nullSafe = dynamic_cast<NullSafeAccessExpr*>(varDecl->initializer.get());
+	ASSERT_NE(nullSafe, nullptr);
+	EXPECT_EQ(nullSafe->field, "name");
+}
+
+TEST(ParserPhase3, NullSafeAccessInReturnExpression) {
+	auto program = parse(R"(
+	main(): int {
+		return user?.age : 0;
+	}
+	)");
+	ASSERT_EQ(program.functions.size(), 1u);
+	auto& fn = program.functions[0];
+	ASSERT_EQ(fn->body.statements.size(), 1u);
+
+	auto* ret = dynamic_cast<ReturnStmt*>(fn->body.statements[0].get());
+	ASSERT_NE(ret, nullptr);
+	auto* nullSafe = dynamic_cast<NullSafeAccessExpr*>(ret->value.get());
+	ASSERT_NE(nullSafe, nullptr);
+	EXPECT_EQ(nullSafe->field, "age");
+
+	auto* fallback = dynamic_cast<IntLiteralExpr*>(nullSafe->fallback.get());
+	ASSERT_NE(fallback, nullptr);
+	EXPECT_EQ(fallback->value, 0);
+}
+
+// ============================================================
+// Phase 3: Match Null Patterns
+// ============================================================
+
+TEST(ParserPhase3, MatchWithNullPattern) {
+	auto program = parse(R"(
+	main(): int {
+		match (value) {
+			null => { print("is null"); }
+			_ => { print("not null"); }
+		}
+		return 0;
+	}
+	)");
+	ASSERT_EQ(program.functions.size(), 1u);
+	auto& fn = program.functions[0];
+	ASSERT_EQ(fn->body.statements.size(), 2u);
+	
+	auto* matchStmt = dynamic_cast<MatchStmt*>(fn->body.statements[0].get());
+	ASSERT_NE(matchStmt, nullptr);
+	ASSERT_EQ(matchStmt->cases.size(), 2u);
+	
+	// First case: null pattern
+	EXPECT_TRUE(matchStmt->cases[0].isNullPattern);
+	EXPECT_FALSE(matchStmt->cases[0].isDefault);
+	
+	// Second case: default pattern
+	EXPECT_FALSE(matchStmt->cases[1].isNullPattern);
+	EXPECT_TRUE(matchStmt->cases[1].isDefault);
+}
+
+TEST(ParserPhase3, MatchWithMultiplePatterns) {
+	auto program = parse(R"(
+	main(): int {
+		match (code) {
+			1 | 2 => { print("low"); }
+			3 | 4 => { print("mid"); }
+			null => { print("unknown"); }
+			_ => { print("other"); }
+		}
+		return 0;
+	}
+	)");
+	ASSERT_EQ(program.functions.size(), 1u);
+	auto& fn = program.functions[0];
+	auto* matchStmt = dynamic_cast<MatchStmt*>(fn->body.statements[0].get());
+	ASSERT_NE(matchStmt, nullptr);
+	ASSERT_EQ(matchStmt->cases.size(), 4u);
+	
+	// Regular patterns
+	EXPECT_EQ(matchStmt->cases[0].patterns.size(), 2u);
+	EXPECT_EQ(matchStmt->cases[1].patterns.size(), 2u);
+	
+	// Null pattern
+	EXPECT_TRUE(matchStmt->cases[2].isNullPattern);
+	
+	// Default pattern
+	EXPECT_TRUE(matchStmt->cases[3].isDefault);
+}

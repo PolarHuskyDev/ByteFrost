@@ -1,0 +1,7 @@
+{
+  "id": "for_in_empty_array",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "For-in loop over empty array is a no-op",
+  "timeoutSeconds": 10
+}

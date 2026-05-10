@@ -1,0 +1,7 @@
+{
+  "id": "const_expr_arithmetic",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Const variables used in arithmetic expressions",
+  "timeoutSeconds": 10
+}

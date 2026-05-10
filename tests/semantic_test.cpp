@@ -456,7 +456,8 @@ TEST(SemanticContext, ValidStructIsOk) {
 static std::unique_ptr<AssignStmt> makeThisAssign(const std::string& fieldName) {
 	auto thisExpr = std::make_unique<ThisExpr>();
 	auto ma = std::make_unique<MemberAccessExpr>(std::move(thisExpr), fieldName);
-	auto rhs = std::make_unique<IntLiteralExpr>(0, "0");
+	auto rhs = std::make_unique<StructInitExpr>(
+		std::vector<std::pair<std::string, ExprPtr>>{});
 	return std::make_unique<AssignStmt>("=", std::move(ma), std::move(rhs));
 }
 
@@ -538,3 +539,644 @@ TEST(SemanticContext, InitializedStructFieldIsOk) {
 
 	EXPECT_TRUE(sem.analyze(prog, "test.bf"));
 }
+
+TEST(SemanticContext, ConstCannotBeReassigned) {
+	SemanticContext sem;
+	Program prog;
+
+	auto fn = makeFunc("main");
+	auto decl = std::make_unique<VarDeclStmt>();
+	decl->name = "x";
+	decl->type = std::make_unique<TypeNode>("int");
+	decl->initializer = std::make_unique<IntLiteralExpr>(1, "1");
+	decl->isConstant = true;
+	decl->line = 1;
+	decl->column = 1;
+
+	auto target = std::make_unique<IdentifierExpr>("x");
+	auto value = std::make_unique<IntLiteralExpr>(2, "2");
+	auto assign = std::make_unique<AssignStmt>("=", std::move(target), std::move(value));
+	assign->line = 2;
+	assign->column = 1;
+
+	fn->body.statements.push_back(std::move(decl));
+	fn->body.statements.push_back(std::move(assign));
+	prog.functions.push_back(std::move(fn));
+
+	EXPECT_FALSE(sem.analyze(prog, "test.bf"));
+	std::ostringstream oss;
+	sem.diagnostics().emit(oss, false);
+	EXPECT_NE(oss.str().find("cannot reassign constant 'x'"), std::string::npos);
+}
+
+TEST(SemanticContext, ConstDeferredInitializationOnceIsValid) {
+	SemanticContext sem;
+	Program prog;
+
+	auto fn = makeFunc("main");
+	auto decl = std::make_unique<VarDeclStmt>();
+	decl->name = "x";
+	decl->type = std::make_unique<TypeNode>("int");
+	decl->isConstant = true;
+	decl->line = 1;
+	decl->column = 1;
+
+	auto target = std::make_unique<IdentifierExpr>("x");
+	auto value = std::make_unique<IntLiteralExpr>(5, "5");
+	auto assign = std::make_unique<AssignStmt>("=", std::move(target), std::move(value));
+	assign->line = 2;
+	assign->column = 1;
+
+	fn->body.statements.push_back(std::move(decl));
+	fn->body.statements.push_back(std::move(assign));
+	prog.functions.push_back(std::move(fn));
+
+	EXPECT_TRUE(sem.analyze(prog, "test.bf"));
+}
+
+TEST(SemanticContext, CannotAssignNullToNonNullableVarDecl) {
+	SemanticContext sem;
+	Program prog;
+
+	auto fn = makeFunc("main");
+	auto decl = std::make_unique<VarDeclStmt>();
+	decl->name = "x";
+	decl->type = std::make_unique<TypeNode>("int");
+	decl->initializer = std::make_unique<NullLiteralExpr>();
+	decl->line = 1;
+	decl->column = 1;
+
+	fn->body.statements.push_back(std::move(decl));
+	prog.functions.push_back(std::move(fn));
+
+	EXPECT_FALSE(sem.analyze(prog, "test.bf"));
+	std::ostringstream oss;
+	sem.diagnostics().emit(oss, false);
+	EXPECT_NE(oss.str().find("cannot assign null to non-nullable type 'int'"), std::string::npos);
+}
+
+TEST(SemanticContext, NullableVarDeclAcceptsNull) {
+	SemanticContext sem;
+	Program prog;
+
+	auto fn = makeFunc("main");
+	auto decl = std::make_unique<VarDeclStmt>();
+	decl->name = "x";
+	decl->type = std::make_unique<TypeNode>("int");
+	decl->type->isNullable = true;
+	decl->initializer = std::make_unique<NullLiteralExpr>();
+	decl->line = 1;
+	decl->column = 1;
+
+	fn->body.statements.push_back(std::move(decl));
+	prog.functions.push_back(std::move(fn));
+
+	EXPECT_TRUE(sem.analyze(prog, "test.bf"));
+}
+
+TEST(SemanticContext, ForInRangeMustBeIterable) {
+	SemanticContext sem;
+	Program prog;
+
+	auto fn = makeFunc("main");
+	auto nDecl = std::make_unique<VarDeclStmt>();
+	nDecl->name = "n";
+	nDecl->type = std::make_unique<TypeNode>("int");
+	nDecl->initializer = std::make_unique<IntLiteralExpr>(10, "10");
+
+	auto fi = std::make_unique<ForInStmt>();
+	fi->varName = "item";
+	fi->range = std::make_unique<IdentifierExpr>("n");
+
+	fn->body.statements.push_back(std::move(nDecl));
+	fn->body.statements.push_back(std::move(fi));
+	prog.functions.push_back(std::move(fn));
+
+	EXPECT_FALSE(sem.analyze(prog, "test.bf"));
+	std::ostringstream oss;
+	sem.diagnostics().emit(oss, false);
+	EXPECT_NE(oss.str().find("for-in range must be iterable"), std::string::npos);
+}
+
+TEST(SemanticContext, ReadonlyFieldCannotBeAssigned) {
+	SemanticContext sem;
+	Program prog;
+
+	auto user = std::make_unique<StructDecl>();
+	user->name = "User";
+	StructMember age;
+	age.kind = StructMember::FIELD;
+	age.fieldName = "age";
+	age.fieldType = std::make_unique<TypeNode>("int");
+	age.isReadonly = true;
+	user->members.push_back(std::move(age));
+	prog.structs.push_back(std::move(user));
+
+	auto method = makeFunc("setAge");
+	auto thisExpr = std::make_unique<ThisExpr>();
+	auto ageTarget = std::make_unique<MemberAccessExpr>(std::move(thisExpr), "age");
+	auto ageValue = std::make_unique<IntLiteralExpr>(20, "20");
+	auto assign = std::make_unique<AssignStmt>("=", std::move(ageTarget), std::move(ageValue));
+	method->body.statements.push_back(std::move(assign));
+
+	StructMember setAge;
+	setAge.kind = StructMember::METHOD;
+	setAge.method = std::move(method);
+	prog.structs[0]->members.push_back(std::move(setAge));
+
+	EXPECT_FALSE(sem.analyze(prog, "test.bf"));
+	std::ostringstream oss;
+	sem.diagnostics().emit(oss, false);
+	EXPECT_NE(oss.str().find("cannot assign to readonly field 'age'"), std::string::npos);
+}
+
+TEST(SemanticContext, ReadonlyFieldCanBeAssignedInConstructor) {
+	SemanticContext sem;
+	Program prog;
+
+	auto user = std::make_unique<StructDecl>();
+	user->name = "User";
+	StructMember age;
+	age.kind = StructMember::FIELD;
+	age.fieldName = "age";
+	age.fieldType = std::make_unique<TypeNode>("int");
+	age.isReadonly = true;
+	user->members.push_back(std::move(age));
+
+	auto ctor = makeFunc("constructor");
+	auto thisExpr = std::make_unique<ThisExpr>();
+	auto ageTarget = std::make_unique<MemberAccessExpr>(std::move(thisExpr), "age");
+	auto ageValue = std::make_unique<IntLiteralExpr>(20, "20");
+	auto assign = std::make_unique<AssignStmt>("=", std::move(ageTarget), std::move(ageValue));
+	ctor->body.statements.push_back(std::move(assign));
+
+	StructMember ctorMember;
+	ctorMember.kind = StructMember::METHOD;
+	ctorMember.method = std::move(ctor);
+	user->members.push_back(std::move(ctorMember));
+
+	prog.structs.push_back(std::move(user));
+
+	EXPECT_TRUE(sem.analyze(prog, "test.bf"));
+}
+
+TEST(SemanticContext, ReadonlyFieldOnOtherInstanceCannotBeAssignedInConstructor) {
+	SemanticContext sem;
+	Program prog;
+
+	auto user = std::make_unique<StructDecl>();
+	user->name = "User";
+	StructMember age;
+	age.kind = StructMember::FIELD;
+	age.fieldName = "age";
+	age.fieldType = std::make_unique<TypeNode>("int");
+	age.isReadonly = true;
+	user->members.push_back(std::move(age));
+
+	auto ctor = makeFunc("constructor");
+	auto decl = std::make_unique<VarDeclStmt>();
+	decl->name = "other";
+	decl->type = std::make_unique<TypeNode>("User");
+	ctor->body.statements.push_back(std::move(decl));
+
+	auto otherExpr = std::make_unique<IdentifierExpr>("other");
+	auto ageTarget = std::make_unique<MemberAccessExpr>(std::move(otherExpr), "age");
+	auto ageValue = std::make_unique<IntLiteralExpr>(20, "20");
+	auto assign = std::make_unique<AssignStmt>("=", std::move(ageTarget), std::move(ageValue));
+	ctor->body.statements.push_back(std::move(assign));
+
+	StructMember ctorMember;
+	ctorMember.kind = StructMember::METHOD;
+	ctorMember.method = std::move(ctor);
+	user->members.push_back(std::move(ctorMember));
+
+	prog.structs.push_back(std::move(user));
+
+	EXPECT_FALSE(sem.analyze(prog, "test.bf"));
+	std::ostringstream oss;
+	sem.diagnostics().emit(oss, false);
+	EXPECT_NE(oss.str().find("cannot assign to readonly field 'age'"), std::string::npos);
+}
+
+TEST(SemanticContext, NullSafeAccessRequiresNullableObject) {
+	SemanticContext sem;
+	Program prog;
+
+	auto user = std::make_unique<StructDecl>();
+	user->name = "User";
+	StructMember age;
+	age.kind = StructMember::FIELD;
+	age.fieldName = "age";
+	age.fieldType = std::make_unique<TypeNode>("int");
+	user->members.push_back(std::move(age));
+	prog.structs.push_back(std::move(user));
+
+	auto fn = makeFunc("main");
+	auto userDecl = std::make_unique<VarDeclStmt>();
+	userDecl->name = "u";
+	userDecl->type = std::make_unique<TypeNode>("User");
+
+	auto ns = std::make_unique<NullSafeAccessExpr>(
+		std::make_unique<IdentifierExpr>("u"), "age", std::make_unique<IntLiteralExpr>(0, "0"));
+	auto stmt = std::make_unique<ExprStmt>(std::move(ns));
+
+	fn->body.statements.push_back(std::move(userDecl));
+	fn->body.statements.push_back(std::move(stmt));
+	prog.functions.push_back(std::move(fn));
+
+	EXPECT_FALSE(sem.analyze(prog, "test.bf"));
+	std::ostringstream oss;
+	sem.diagnostics().emit(oss, false);
+	EXPECT_NE(oss.str().find("null-safe access requires nullable object"), std::string::npos);
+}
+
+TEST(SemanticContext, NullSafeAccessFallbackTypeMustMatchFieldType) {
+	SemanticContext sem;
+	Program prog;
+
+	auto user = std::make_unique<StructDecl>();
+	user->name = "User";
+	StructMember age;
+	age.kind = StructMember::FIELD;
+	age.fieldName = "age";
+	age.fieldType = std::make_unique<TypeNode>("int");
+	user->members.push_back(std::move(age));
+	prog.structs.push_back(std::move(user));
+
+	auto fn = makeFunc("main");
+	auto userDecl = std::make_unique<VarDeclStmt>();
+	userDecl->name = "u";
+	userDecl->type = std::make_unique<TypeNode>("User");
+	userDecl->type->isNullable = true;
+
+	auto ns = std::make_unique<NullSafeAccessExpr>(
+		std::make_unique<IdentifierExpr>("u"), "age", std::make_unique<StringLiteralExpr>("fallback"));
+	auto stmt = std::make_unique<ExprStmt>(std::move(ns));
+
+	fn->body.statements.push_back(std::move(userDecl));
+	fn->body.statements.push_back(std::move(stmt));
+	prog.functions.push_back(std::move(fn));
+
+	EXPECT_FALSE(sem.analyze(prog, "test.bf"));
+	std::ostringstream oss;
+	sem.diagnostics().emit(oss, false);
+	EXPECT_NE(oss.str().find("null-safe fallback type"), std::string::npos);
+}
+
+// ===========================================================================
+// Phase 3 C.1 — Struct literal field initialization rules
+// ===========================================================================
+
+// Helper: make a Point struct with int fields x and y (both non-nullable).
+static std::unique_ptr<StructDecl> makePointStruct() {
+	auto sd = std::make_unique<StructDecl>();
+	sd->name = "Point";
+	sd->line = 1;
+	for (const auto& name : {"x", "y"}) {
+		StructMember m;
+		m.kind      = StructMember::FIELD;
+		m.fieldName = name;
+		m.fieldType = std::make_unique<TypeNode>("int");
+		sd->members.push_back(std::move(m));
+	}
+	return sd;
+}
+
+TEST(SemanticContext, StructLiteralWithAllRequiredFields) {
+	// p: Point = { x: 1, y: 2 }  — both fields present → valid
+	SemanticContext sem;
+	Program prog;
+	prog.structs.push_back(makePointStruct());
+
+	auto fn = makeFunc("main");
+	auto decl = std::make_unique<VarDeclStmt>();
+	decl->name = "p";
+	decl->type = std::make_unique<TypeNode>("Point");
+	decl->line = 2;
+	decl->column = 1;
+
+	std::vector<std::pair<std::string, ExprPtr>> fields;
+	fields.emplace_back("x", std::make_unique<IntLiteralExpr>(1, "1"));
+	fields.emplace_back("y", std::make_unique<IntLiteralExpr>(2, "2"));
+	decl->initializer = std::make_unique<StructInitExpr>(std::move(fields));
+
+	fn->body.statements.push_back(std::move(decl));
+	prog.functions.push_back(std::move(fn));
+
+	EXPECT_TRUE(sem.analyze(prog, "test.bf"));
+}
+
+TEST(SemanticContext, StructLiteralMissingNonNullableField) {
+	// p: Point = { x: 1 }  — y is missing → error
+	SemanticContext sem;
+	Program prog;
+	prog.structs.push_back(makePointStruct());
+
+	auto fn = makeFunc("main");
+	auto decl = std::make_unique<VarDeclStmt>();
+	decl->name = "p";
+	decl->type = std::make_unique<TypeNode>("Point");
+	decl->line = 2;
+	decl->column = 1;
+
+	std::vector<std::pair<std::string, ExprPtr>> fields;
+	fields.emplace_back("x", std::make_unique<IntLiteralExpr>(1, "1"));
+	decl->initializer = std::make_unique<StructInitExpr>(std::move(fields));
+
+	fn->body.statements.push_back(std::move(decl));
+	prog.functions.push_back(std::move(fn));
+
+	EXPECT_FALSE(sem.analyze(prog, "test.bf"));
+	std::ostringstream oss;
+	sem.diagnostics().emit(oss, false);
+	EXPECT_NE(oss.str().find("non-nullable field 'y'"), std::string::npos);
+}
+
+TEST(SemanticContext, StructLiteralUnknownField) {
+	// p: Point = { x: 1, y: 2, z: 3 }  — z doesn't exist → error
+	SemanticContext sem;
+	Program prog;
+	prog.structs.push_back(makePointStruct());
+
+	auto fn = makeFunc("main");
+	auto decl = std::make_unique<VarDeclStmt>();
+	decl->name = "p";
+	decl->type = std::make_unique<TypeNode>("Point");
+	decl->line = 2;
+	decl->column = 1;
+
+	std::vector<std::pair<std::string, ExprPtr>> fields;
+	fields.emplace_back("x", std::make_unique<IntLiteralExpr>(1, "1"));
+	fields.emplace_back("y", std::make_unique<IntLiteralExpr>(2, "2"));
+	fields.emplace_back("z", std::make_unique<IntLiteralExpr>(3, "3"));
+	decl->initializer = std::make_unique<StructInitExpr>(std::move(fields));
+
+	fn->body.statements.push_back(std::move(decl));
+	prog.functions.push_back(std::move(fn));
+
+	EXPECT_FALSE(sem.analyze(prog, "test.bf"));
+	std::ostringstream oss;
+	sem.diagnostics().emit(oss, false);
+	EXPECT_NE(oss.str().find("unknown field 'z'"), std::string::npos);
+}
+
+TEST(SemanticContext, StructLiteralNullableFieldCanBeOmitted) {
+	// Struct with a nullable field: omitting it is allowed.
+	SemanticContext sem;
+	Program prog;
+
+	auto sd = std::make_unique<StructDecl>();
+	sd->name = "Person";
+	sd->line = 1;
+	// name: string (non-nullable)
+	StructMember mName;
+	mName.kind      = StructMember::FIELD;
+	mName.fieldName = "name";
+	mName.fieldType = std::make_unique<TypeNode>("string");
+	sd->members.push_back(std::move(mName));
+	// nickname: string? (nullable — can be omitted)
+	StructMember mNick;
+	mNick.kind      = StructMember::FIELD;
+	mNick.fieldName = "nickname";
+	mNick.fieldType = std::make_unique<TypeNode>("string");
+	mNick.fieldType->isNullable = true;
+	sd->members.push_back(std::move(mNick));
+	prog.structs.push_back(std::move(sd));
+
+	auto fn = makeFunc("main");
+	auto decl = std::make_unique<VarDeclStmt>();
+	decl->name = "p";
+	decl->type = std::make_unique<TypeNode>("Person");
+	decl->line = 2;
+	decl->column = 1;
+
+	// Only provide `name`; omit nullable `nickname`.
+	std::vector<std::pair<std::string, ExprPtr>> fields;
+	fields.emplace_back("name", std::make_unique<StringLiteralExpr>("Alice"));
+	decl->initializer = std::make_unique<StructInitExpr>(std::move(fields));
+
+	fn->body.statements.push_back(std::move(decl));
+	prog.functions.push_back(std::move(fn));
+
+	EXPECT_TRUE(sem.analyze(prog, "test.bf"));
+}
+
+// ===========================================================================
+// Phase 3 C.4 — Const struct fields
+// ===========================================================================
+
+TEST(SemanticContext, ConstStructFieldCannotBeNullable) {
+	// struct Config { const maxSize: int?; }  — const nullable → error
+	SemanticContext sem;
+	Program prog;
+
+	auto sd = std::make_unique<StructDecl>();
+	sd->name = "Config";
+	sd->line = 1;
+	StructMember m;
+	m.kind      = StructMember::FIELD;
+	m.fieldName = "maxSize";
+	m.fieldType = std::make_unique<TypeNode>("int");
+	m.fieldType->isNullable = true;
+	m.isConstant = true;
+	sd->members.push_back(std::move(m));
+	prog.structs.push_back(std::move(sd));
+
+	EXPECT_FALSE(sem.analyze(prog, "test.bf"));
+	std::ostringstream oss;
+	sem.diagnostics().emit(oss, false);
+	EXPECT_NE(oss.str().find("cannot be nullable"), std::string::npos);
+}
+
+TEST(SemanticContext, ConstStructFieldCannotBeAssigned) {
+	// Assigning to a const struct field anywhere must fail.
+	SemanticContext sem;
+	Program prog;
+
+	auto sd = std::make_unique<StructDecl>();
+	sd->name = "Config";
+	sd->line = 1;
+	StructMember m;
+	m.kind      = StructMember::FIELD;
+	m.fieldName = "maxSize";
+	m.fieldType = std::make_unique<TypeNode>("int");
+	m.isConstant = true;
+	sd->members.push_back(std::move(m));
+	prog.structs.push_back(std::move(sd));
+
+	// method that tries to assign the const field
+	auto fn = makeFunc("setMax");
+	auto thisExpr = std::make_unique<ThisExpr>();
+	auto target   = std::make_unique<MemberAccessExpr>(std::move(thisExpr), "maxSize");
+	auto value    = std::make_unique<IntLiteralExpr>(42, "42");
+	auto assign   = std::make_unique<AssignStmt>("=", std::move(target), std::move(value));
+	assign->line  = 3;
+	fn->body.statements.push_back(std::move(assign));
+
+	StructMember mm;
+	mm.kind   = StructMember::METHOD;
+	mm.method = std::move(fn);
+	prog.structs[0]->members.push_back(std::move(mm));
+
+	EXPECT_FALSE(sem.analyze(prog, "test.bf"));
+	std::ostringstream oss;
+	sem.diagnostics().emit(oss, false);
+	EXPECT_NE(oss.str().find("cannot assign to const field 'maxSize'"), std::string::npos);
+}
+
+TEST(SemanticContext, ConstStructFieldBlockedEvenInConstructor) {
+	// Unlike readonly, const fields cannot be set even in the constructor.
+	SemanticContext sem;
+	Program prog;
+
+	auto sd = std::make_unique<StructDecl>();
+	sd->name = "Config";
+	sd->line = 1;
+	StructMember m;
+	m.kind      = StructMember::FIELD;
+	m.fieldName = "maxSize";
+	m.fieldType = std::make_unique<TypeNode>("int");
+	m.isConstant = true;
+	sd->members.push_back(std::move(m));
+	prog.structs.push_back(std::move(sd));
+
+	auto ctor = makeFunc("constructor");
+	auto thisExpr = std::make_unique<ThisExpr>();
+	auto target   = std::make_unique<MemberAccessExpr>(std::move(thisExpr), "maxSize");
+	auto value    = std::make_unique<IntLiteralExpr>(100, "100");
+	auto assign   = std::make_unique<AssignStmt>("=", std::move(target), std::move(value));
+	ctor->body.statements.push_back(std::move(assign));
+
+	StructMember cm;
+	cm.kind   = StructMember::METHOD;
+	cm.method = std::move(ctor);
+	prog.structs[0]->members.push_back(std::move(cm));
+
+	EXPECT_FALSE(sem.analyze(prog, "test.bf"));
+	std::ostringstream oss;
+	sem.diagnostics().emit(oss, false);
+	EXPECT_NE(oss.str().find("cannot assign to const field 'maxSize'"), std::string::npos);
+}
+
+// ===========================================================================
+// Phase 3 D.4 — Type narrowing for nullable types
+// ===========================================================================
+
+// Helper: build a nullable User? struct with an `age: int` field.
+static std::unique_ptr<StructDecl> makeUserStruct() {
+	auto sd = std::make_unique<StructDecl>();
+	sd->name = "User";
+	sd->line = 1;
+	StructMember m;
+	m.kind      = StructMember::FIELD;
+	m.fieldName = "age";
+	m.fieldType = std::make_unique<TypeNode>("int");
+	sd->members.push_back(std::move(m));
+	return sd;
+}
+
+TEST(SemanticContext, NullNarrowingNotEqualNullInThenBlock) {
+	// if (u != null) { u.age; }  — u narrowed to User in then-block → valid
+	SemanticContext sem;
+	Program prog;
+	prog.structs.push_back(makeUserStruct());
+
+	auto fn = makeFunc("main");
+
+	// u: User? (nullable)
+	auto uDecl = std::make_unique<VarDeclStmt>();
+	uDecl->name = "u";
+	uDecl->type = std::make_unique<TypeNode>("User");
+	uDecl->type->isNullable = true;
+	uDecl->line = 2;
+
+	// Condition: u != null
+	auto cond = std::make_unique<BinaryExpr>(
+		"!=", std::make_unique<IdentifierExpr>("u"), std::make_unique<NullLiteralExpr>());
+
+	// then-body: u.age  (should succeed — u is narrowed to User)
+	auto access = std::make_unique<MemberAccessExpr>(std::make_unique<IdentifierExpr>("u"), "age");
+	auto bodyStmt = std::make_unique<ExprStmt>(std::move(access));
+
+	auto ifStmt = std::make_unique<IfStmt>();
+	ifStmt->condition = std::move(cond);
+	ifStmt->thenBlock.statements.push_back(std::move(bodyStmt));
+	ifStmt->line = 3;
+
+	fn->body.statements.push_back(std::move(uDecl));
+	fn->body.statements.push_back(std::move(ifStmt));
+	prog.functions.push_back(std::move(fn));
+
+	EXPECT_TRUE(sem.analyze(prog, "test.bf"));
+}
+
+TEST(SemanticContext, NullNarrowingEqualNullInElseBlock) {
+	// if (u == null) { } else { u.age; }  — u narrowed to User in else → valid
+	SemanticContext sem;
+	Program prog;
+	prog.structs.push_back(makeUserStruct());
+
+	auto fn = makeFunc("main");
+
+	auto uDecl = std::make_unique<VarDeclStmt>();
+	uDecl->name = "u";
+	uDecl->type = std::make_unique<TypeNode>("User");
+	uDecl->type->isNullable = true;
+	uDecl->line = 2;
+
+	// Condition: u == null
+	auto cond = std::make_unique<BinaryExpr>(
+		"==", std::make_unique<IdentifierExpr>("u"), std::make_unique<NullLiteralExpr>());
+
+	// else-body: u.age (should succeed — u is narrowed to User)
+	auto access   = std::make_unique<MemberAccessExpr>(std::make_unique<IdentifierExpr>("u"), "age");
+	auto bodyStmt = std::make_unique<ExprStmt>(std::move(access));
+
+	auto elseBlock = std::make_unique<Block>();
+	elseBlock->statements.push_back(std::move(bodyStmt));
+
+	auto ifStmt = std::make_unique<IfStmt>();
+	ifStmt->condition = std::move(cond);
+	ifStmt->elseBlock = std::move(elseBlock);
+	ifStmt->line = 3;
+
+	fn->body.statements.push_back(std::move(uDecl));
+	fn->body.statements.push_back(std::move(ifStmt));
+	prog.functions.push_back(std::move(fn));
+
+	EXPECT_TRUE(sem.analyze(prog, "test.bf"));
+}
+
+TEST(SemanticContext, NullNarrowingTruthyCheckInThenBlock) {
+	// if (u) { u.age; }  — truthy on nullable narrows u to User → valid
+	SemanticContext sem;
+	Program prog;
+	prog.structs.push_back(makeUserStruct());
+
+	auto fn = makeFunc("main");
+
+	auto uDecl = std::make_unique<VarDeclStmt>();
+	uDecl->name = "u";
+	uDecl->type = std::make_unique<TypeNode>("User");
+	uDecl->type->isNullable = true;
+	uDecl->line = 2;
+
+	// Condition: just `u` (truthy)
+	auto cond = std::make_unique<IdentifierExpr>("u");
+	cond->line = 3;
+
+	auto access   = std::make_unique<MemberAccessExpr>(std::make_unique<IdentifierExpr>("u"), "age");
+	auto bodyStmt = std::make_unique<ExprStmt>(std::move(access));
+
+	auto ifStmt = std::make_unique<IfStmt>();
+	ifStmt->condition = std::move(cond);
+	ifStmt->thenBlock.statements.push_back(std::move(bodyStmt));
+	ifStmt->line = 3;
+
+	fn->body.statements.push_back(std::move(uDecl));
+	fn->body.statements.push_back(std::move(ifStmt));
+	prog.functions.push_back(std::move(fn));
+
+	EXPECT_TRUE(sem.analyze(prog, "test.bf"));
+}
+

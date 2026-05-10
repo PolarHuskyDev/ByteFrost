@@ -1,0 +1,7 @@
+{
+  "id": "for_in_break",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Break inside for-in loop exits early",
+  "timeoutSeconds": 10
+}

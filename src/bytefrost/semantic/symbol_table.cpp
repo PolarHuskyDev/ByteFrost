@@ -31,6 +31,16 @@ const SymbolInfo* ScopeManager::lookup(const std::string& name) const {
 	return nullptr;
 }
 
+SymbolInfo* ScopeManager::lookupMutable(const std::string& name) {
+	for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
+		auto found = it->find(name);
+		if (found != it->end()) {
+			return &found->second;
+		}
+	}
+	return nullptr;
+}
+
 bool ScopeManager::isDeclaredInCurrentScope(const std::string& name) const {
 	if (scopes_.empty())
 		return false;

@@ -2,6 +2,7 @@
 
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "bytefrost/diagnostics/diagnostic_engine.h"
@@ -50,10 +51,22 @@ private:
 	ScopeManager     scopes_;
 
 	std::string sourceFile_;
+	std::string currentFunctionName_;
+	std::string currentThisTypeName_;
 	/// Local names brought in via import statements.  Used to suppress false-
 	/// positive "undefined variable" / "unknown type" diagnostics for symbols
 	/// that are resolved by the cross-module linker, not the single-file AST.
 	std::unordered_set<std::string> importedNames_;
+
+	struct FieldSemInfo {
+		bool isReadonly = false;
+		bool isConstant = false;
+		bool isNullable = false;
+		BFType type = BFType::makeUnknown();
+	};
+
+	// Struct name -> field name -> field semantic flags.
+	std::unordered_map<std::string, std::unordered_map<std::string, FieldSemInfo>> structFieldInfo_;
 
 	// ------------------------------------------------------------------
 	// Pass 1: collect top-level declarations
@@ -84,10 +97,26 @@ private:
 	BFType analyzeUnary(const UnaryExpr& expr);
 	BFType analyzeMemberAccess(const MemberAccessExpr& expr);
 	BFType analyzeIndex(const IndexExpr& expr);
+	BFType analyzeNullSafeAccess(const NullSafeAccessExpr& expr);
+
+	bool isCompileTimeConstantExpr(const Expression& expr) const;
 
 	// ------------------------------------------------------------------
 	// Helpers
 	// ------------------------------------------------------------------
+
+	/// C.1: Validate that all non-nullable fields are present in a struct
+	/// literal and no unknown field names are used.
+	void checkStructInit(const std::string& structName,
+	                     const StructInitExpr& initExpr,
+	                     int line, int col);
+
+	/// D.4: Analyse a block with one variable shadowed by its non-nullable
+	/// type (null-narrowing after an `x != null` / truthy check).
+	void analyzeBlockWithNarrowing(const Block& block,
+	                               const std::string& varName,
+	                               const BFType& narrowedType);
+
 	SourceLocation loc(int line, int col) const;
 	static const std::set<std::string>& stdlibMathNames();
 };
