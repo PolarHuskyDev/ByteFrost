@@ -6,14 +6,14 @@
 # according to its kind and target.
 #
 # Test structure:
-#   tests/e2e/compiler/<test_id>/
+#   tests/e2e/compiler/<category>/<test_id>/
 #     metadata.json
 #     src/main.bf (required)
 #     stdout.txt (optional - validates stdout)
 #     stderr.txt (optional - validates stderr)
 #     stdin.txt (optional - provides stdin)
 #
-#   tests/e2e/orca/<test_id>/
+#   tests/e2e/orca/<category>/<test_id>/
 #     metadata.json
 #     orca.toml (required)
 #     src/ (project sources)
@@ -41,8 +41,9 @@ done
 
 COMPILER="${COMPILER:-$PROJECT_DIR/build/Release/byte_frost}"
 ORCA_BIN="$(dirname "$COMPILER")/orca"
+_SAVED_TMP="${TMP:-}"
 TMP_DIR=$(mktemp -d)
-trap 'rm -rf "$TMP_DIR"' EXIT
+trap 'rm -rf "$TMP_DIR"; export TMP="${_SAVED_TMP}"' EXIT
 
 PASS=0
 FAIL=0
@@ -454,7 +455,9 @@ run_orca_smoke() {
     fi
     
     if [ -f "$stdin_file" ]; then
-        if ! cat "$stdin_file" | timeout "$timeout" "$exe_file" >"$TMP_DIR/${id}.out" 2>"$TMP_DIR/${id}.run_err"; then
+        if cat "$stdin_file" | timeout "$timeout" "$exe_file" >"$TMP_DIR/${id}.out" 2>"$TMP_DIR/${id}.run_err"; then
+            :
+        else
             exit_code=$?
             if [ $exit_code -eq 124 ]; then
                 echo -e "  ${RED}FAIL${NC} timed out after ${timeout}s"
@@ -466,7 +469,9 @@ run_orca_smoke() {
             return
         fi
     else
-        if ! timeout "$timeout" "$exe_file" >"$TMP_DIR/${id}.out" 2>"$TMP_DIR/${id}.run_err"; then
+        if timeout "$timeout" "$exe_file" >"$TMP_DIR/${id}.out" 2>"$TMP_DIR/${id}.run_err"; then
+            :
+        else
             exit_code=$?
             if [ $exit_code -eq 124 ]; then
                 echo -e "  ${RED}FAIL${NC} timed out after ${timeout}s"

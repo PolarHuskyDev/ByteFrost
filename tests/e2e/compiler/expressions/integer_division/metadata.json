@@ -1,0 +1,7 @@
+{
+  "id": "integer_division",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Integer division truncates toward zero",
+  "timeoutSeconds": 10
+}

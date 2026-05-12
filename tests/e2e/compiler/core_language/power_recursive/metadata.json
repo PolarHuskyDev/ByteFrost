@@ -1,0 +1,7 @@
+{
+  "id": "power_recursive",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Recursive power function",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "boolean_helper_functions",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Boolean functions combining AND and OR checks",
+  "timeoutSeconds": 10
+}

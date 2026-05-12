@@ -1,0 +1,7 @@
+{
+  "id": "lcm",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Least common multiple via simultaneous increment algorithm",
+  "timeoutSeconds": 10
+}

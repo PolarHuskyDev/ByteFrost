@@ -1,0 +1,7 @@
+{
+  "id": "for_sum_even",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Sum only even numbers in range using for and modulo",
+  "timeoutSeconds": 10
+}

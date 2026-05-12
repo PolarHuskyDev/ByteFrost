@@ -1,0 +1,7 @@
+{
+  "id": "undefined_function",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Calling an undefined function must fail",
+  "timeoutSeconds": 10
+}

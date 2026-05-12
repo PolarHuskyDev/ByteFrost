@@ -1,0 +1,7 @@
+{
+  "id": "while_accumulate",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Accumulate sum with while loop and compound assignment",
+  "timeoutSeconds": 10
+}

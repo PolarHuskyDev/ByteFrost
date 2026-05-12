@@ -1,0 +1,7 @@
+{
+  "id": "float_multiply",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Multiply two float literals and print result",
+  "timeoutSeconds": 10
+}

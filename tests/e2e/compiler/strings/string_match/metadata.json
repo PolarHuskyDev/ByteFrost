@@ -1,0 +1,7 @@
+{
+  "id": "string_match",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Match on string value selects correct arm",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "if_no_else_false",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "If condition false with no else branch prints nothing",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "for_continue",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "For loop skipping multiples of 3 with continue",
+  "timeoutSeconds": 10
+}

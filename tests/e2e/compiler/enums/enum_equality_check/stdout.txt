@@ -1,0 +1,2 @@
+midweek
+not weekend

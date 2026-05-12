@@ -1,0 +1,7 @@
+{
+  "id": "string_equality",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "String equality and inequality comparisons",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "null_assignment_to_non_nullable_rejected",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Assigning null to non-nullable variable must fail",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "ternary_like_if",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Inline if else assigns correct value via separate variable",
+  "timeoutSeconds": 10
+}

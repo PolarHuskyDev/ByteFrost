@@ -1,0 +1,7 @@
+{
+  "id": "enum_if_chain",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Enum variable compared with if-elseif-else chain",
+  "timeoutSeconds": 10
+}

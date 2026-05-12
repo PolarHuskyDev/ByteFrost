@@ -1,0 +1,7 @@
+{
+  "id": "grade_scale_elseif",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Multi-branch elseif chain computing letter grade",
+  "timeoutSeconds": 10
+}

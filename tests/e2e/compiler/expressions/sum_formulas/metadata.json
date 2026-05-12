@@ -1,0 +1,7 @@
+{
+  "id": "sum_formulas",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Closed-form sum and sum-of-squares for n=10",
+  "timeoutSeconds": 10
+}

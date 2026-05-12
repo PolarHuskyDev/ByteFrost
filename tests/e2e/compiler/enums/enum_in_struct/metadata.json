@@ -1,0 +1,7 @@
+{
+  "id": "enum_in_struct",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Struct field of enum type can be set and matched",
+  "timeoutSeconds": 10
+}

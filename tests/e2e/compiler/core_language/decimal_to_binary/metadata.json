@@ -1,0 +1,7 @@
+{
+  "id": "decimal_to_binary",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Convert decimal 13 to binary digits using array and while",
+  "timeoutSeconds": 10
+}

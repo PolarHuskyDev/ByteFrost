@@ -1,0 +1,7 @@
+{
+  "id": "array_sum_loop",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Sum all elements in an array using for-in",
+  "timeoutSeconds": 10
+}

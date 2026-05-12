@@ -1,0 +1,7 @@
+{
+  "id": "char_print_values",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Char literals can be stored and printed",
+  "timeoutSeconds": 10
+}

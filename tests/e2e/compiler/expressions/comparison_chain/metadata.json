@@ -1,0 +1,7 @@
+{
+  "id": "comparison_chain",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Chained comparisons using boolean operators",
+  "timeoutSeconds": 10
+}

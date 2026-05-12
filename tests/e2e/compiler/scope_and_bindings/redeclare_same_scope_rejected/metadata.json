@@ -1,0 +1,7 @@
+{
+  "id": "redeclare_same_scope_rejected",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Redeclaration in the same scope must fail",
+  "timeoutSeconds": 10
+}

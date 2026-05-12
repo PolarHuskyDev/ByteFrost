@@ -1,0 +1,7 @@
+{
+  "id": "sum_of_primes",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Sum of all prime numbers up to 10 using nested while",
+  "timeoutSeconds": 10
+}

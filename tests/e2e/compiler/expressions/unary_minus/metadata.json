@@ -1,0 +1,7 @@
+{
+  "id": "unary_minus",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Unary minus negates integer and double-negates back",
+  "timeoutSeconds": 10
+}

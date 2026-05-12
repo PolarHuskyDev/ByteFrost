@@ -1,0 +1,7 @@
+{
+  "id": "collatz_sequence",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Collatz conjecture step counter for two starting values",
+  "timeoutSeconds": 10
+}

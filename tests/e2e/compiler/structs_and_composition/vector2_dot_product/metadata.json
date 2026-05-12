@@ -1,0 +1,7 @@
+{
+  "id": "vector2_dot_product",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Vector2 struct with dot product method",
+  "timeoutSeconds": 10
+}

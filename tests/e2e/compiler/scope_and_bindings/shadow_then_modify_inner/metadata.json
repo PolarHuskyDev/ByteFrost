@@ -1,0 +1,7 @@
+{
+  "id": "shadow_then_modify_inner",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Modifying shadowed inner var does not affect outer",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "enum_in_interpolation",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Enum value printed as part of interpolated string",
+  "timeoutSeconds": 10
+}

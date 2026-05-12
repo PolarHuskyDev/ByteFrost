@@ -1,0 +1,7 @@
+{
+  "id": "bank_account",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "BankAccount struct with deposit and withdraw methods",
+  "timeoutSeconds": 10
+}

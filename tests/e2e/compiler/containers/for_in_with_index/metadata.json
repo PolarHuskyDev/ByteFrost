@@ -1,0 +1,7 @@
+{
+  "id": "for_in_with_index",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "For-in with external counter acting as index",
+  "timeoutSeconds": 10
+}

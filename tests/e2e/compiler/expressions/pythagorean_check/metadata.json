@@ -1,0 +1,7 @@
+{
+  "id": "pythagorean_check",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Check if 3-4-5 satisfies the Pythagorean theorem",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "pair_swap",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Pair struct with swap method returning new Pair",
+  "timeoutSeconds": 10
+}

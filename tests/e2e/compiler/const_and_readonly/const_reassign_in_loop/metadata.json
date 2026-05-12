@@ -1,0 +1,7 @@
+{
+  "id": "const_reassign_in_loop",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Reassigning const variable inside loop must fail",
+  "timeoutSeconds": 10
+}

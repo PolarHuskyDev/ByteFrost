@@ -1,0 +1,7 @@
+{
+  "id": "mutual_recursion",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Two mutually recursive functions (even/odd check)",
+  "timeoutSeconds": 10
+}

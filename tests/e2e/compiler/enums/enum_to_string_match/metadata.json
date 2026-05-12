@@ -1,0 +1,7 @@
+{
+  "id": "enum_to_string_match",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Function using match to convert enum value to string",
+  "timeoutSeconds": 10
+}

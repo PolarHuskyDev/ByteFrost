@@ -1,0 +1,7 @@
+{
+  "id": "palindrome_number",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Check if an integer reads the same forwards and backwards",
+  "timeoutSeconds": 10
+}

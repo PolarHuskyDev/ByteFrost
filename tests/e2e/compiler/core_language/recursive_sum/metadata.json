@@ -1,0 +1,7 @@
+{
+  "id": "recursive_sum",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Recursive function to sum 1..n",
+  "timeoutSeconds": 10
+}

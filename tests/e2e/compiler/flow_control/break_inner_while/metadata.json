@@ -1,0 +1,7 @@
+{
+  "id": "break_inner_while",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Break exits only inner while; outer continues",
+  "timeoutSeconds": 10
+}

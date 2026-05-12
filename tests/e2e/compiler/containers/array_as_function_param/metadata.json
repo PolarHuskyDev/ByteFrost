@@ -1,0 +1,7 @@
+{
+  "id": "array_as_function_param",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Pass array to function and sum its elements",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "while_break_early",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "While loop with break exits before natural termination",
+  "timeoutSeconds": 10
+}

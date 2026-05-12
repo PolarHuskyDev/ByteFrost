@@ -1,0 +1,7 @@
+{
+  "id": "struct_multiple_methods",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Struct with multiple methods operating on fields",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "sign_function",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Sign function returns 1 0 or -1 based on sign of argument",
+  "timeoutSeconds": 10
+}

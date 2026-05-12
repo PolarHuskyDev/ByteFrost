@@ -1,0 +1,7 @@
+{
+  "id": "precedence_boolean",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Logical precedence must respect unary-not, and, then or",
+  "timeoutSeconds": 10
+}

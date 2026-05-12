@@ -1,0 +1,7 @@
+{
+  "id": "enum_equality_check",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Enum values can be compared with == and !=",
+  "timeoutSeconds": 10
+}

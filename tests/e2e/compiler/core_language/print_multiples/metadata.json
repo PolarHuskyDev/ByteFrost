@@ -1,0 +1,7 @@
+{
+  "id": "print_multiples",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Function prints first N multiples of a number",
+  "timeoutSeconds": 10
+}

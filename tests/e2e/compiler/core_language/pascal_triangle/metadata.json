@@ -1,0 +1,7 @@
+{
+  "id": "pascal_triangle",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Print first 8 rows of Pascals triangle values",
+  "timeoutSeconds": 10
+}

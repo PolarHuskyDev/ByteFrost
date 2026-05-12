@@ -1,0 +1,7 @@
+{
+  "id": "nested_if_shadow",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Nested if blocks each shadow independently",
+  "timeoutSeconds": 10
+}

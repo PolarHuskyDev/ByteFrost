@@ -1,0 +1,7 @@
+{
+  "id": "enum_param_function",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Function accepting and returning enum parameter",
+  "timeoutSeconds": 10
+}

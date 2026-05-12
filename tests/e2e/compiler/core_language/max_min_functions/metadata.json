@@ -1,0 +1,7 @@
+{
+  "id": "max_min_functions",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Helper functions max and min returning correct values",
+  "timeoutSeconds": 10
+}

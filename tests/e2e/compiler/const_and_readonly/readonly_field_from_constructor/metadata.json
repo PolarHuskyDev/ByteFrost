@@ -1,0 +1,7 @@
+{
+  "id": "readonly_field_from_constructor",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Readonly field set in constructor is readable afterward",
+  "timeoutSeconds": 10
+}

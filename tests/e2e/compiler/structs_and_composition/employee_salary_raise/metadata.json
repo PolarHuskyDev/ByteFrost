@@ -1,0 +1,7 @@
+{
+  "id": "employee_salary_raise",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Employee struct with raise method applying percentage increase",
+  "timeoutSeconds": 10
+}

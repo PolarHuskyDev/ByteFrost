@@ -1,0 +1,7 @@
+{
+  "id": "nested_function_calls",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Result of one function call passed to another",
+  "timeoutSeconds": 10
+}

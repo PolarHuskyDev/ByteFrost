@@ -1,0 +1,7 @@
+{
+  "id": "const_in_loop",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Const variable used in loop body stays unchanged",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "integer_division_modulo",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Integer division and modulo of 10 divided by 3",
+  "timeoutSeconds": 10
+}

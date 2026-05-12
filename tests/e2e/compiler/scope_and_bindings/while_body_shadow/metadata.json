@@ -1,0 +1,7 @@
+{
+  "id": "while_body_shadow",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Shadow variable inside while body does not affect outer",
+  "timeoutSeconds": 10
+}

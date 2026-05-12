@@ -1,0 +1,7 @@
+{
+  "id": "enum_two_types_function",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Function accepting two enum parameters and returning enum",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "struct_return_from_function",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Function computes midpoint and returns a struct value",
+  "timeoutSeconds": 10
+}

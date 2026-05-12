@@ -1,0 +1,7 @@
+{
+  "id": "enum_type_mismatch",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Assigning an enum value to an integer variable must fail",
+  "timeoutSeconds": 10
+}

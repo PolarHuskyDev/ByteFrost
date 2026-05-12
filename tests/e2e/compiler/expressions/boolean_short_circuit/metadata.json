@@ -1,0 +1,7 @@
+{
+  "id": "boolean_short_circuit",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Boolean AND and OR produce correct results with mixed conditions",
+  "timeoutSeconds": 10
+}

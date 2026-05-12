@@ -1,0 +1,7 @@
+{
+  "id": "struct_method_uses_field",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Struct method returns computed value from fields",
+  "timeoutSeconds": 10
+}

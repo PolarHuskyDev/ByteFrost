@@ -109,6 +109,7 @@ void SemanticContext::collectTopLevelDecls(const Program& program) {
 		BFType retType = fn->returnType ? resolver_.resolve(*fn->returnType)
 		                               : BFType::makeVoid();
 		scopes_.declare(fn->name, {fn->name, retType, false, ConstInitState::Uninitialized,		                           loc(fn->line, fn->column)});
+		funcParamCounts_[fn->name] = fn->params.size();
 	}
 }
 
@@ -792,7 +793,22 @@ BFType SemanticContext::analyzeCall(const CallExpr& expr) {
 			return BFType::makeUnknown();
 		// Look up in scope (user-defined functions are declared in global scope).
 		const auto* sym = scopes_.lookup(id->name);
-		return sym ? sym->type : BFType::makeUnknown();
+		if (sym) {
+			// Check argument count if we have the signature on record.
+			auto pcIt = funcParamCounts_.find(id->name);
+			if (pcIt != funcParamCounts_.end()) {
+				std::size_t expected = pcIt->second;
+				std::size_t got = expr.arguments.size();
+				if (got != expected) {
+					diag_.error(loc(0, 0),
+					            "function '" + id->name + "' expects " +
+					                std::to_string(expected) + " argument(s) but " +
+					                std::to_string(got) + " were provided");
+				}
+			}
+			return sym->type;
+		}
+		return BFType::makeUnknown();
 	}
 
 	// Member call (method invocation or namespace call) — return unknown;

@@ -1,0 +1,7 @@
+{
+  "id": "function_isolation",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Variables in different functions do not interfere",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "for_in_body_shadow",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "For-in loop var shadows outer variable of same name",
+  "timeoutSeconds": 10
+}

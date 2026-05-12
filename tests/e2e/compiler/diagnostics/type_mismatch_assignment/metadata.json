@@ -1,0 +1,7 @@
+{
+  "id": "type_mismatch_assignment",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Assigning string to int must fail",
+  "timeoutSeconds": 10
+}

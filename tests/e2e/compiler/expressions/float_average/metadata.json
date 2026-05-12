@@ -1,0 +1,7 @@
+{
+  "id": "float_average",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Compute average of four float values using array and for-in",
+  "timeoutSeconds": 10
+}

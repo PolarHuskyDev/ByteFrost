@@ -1,0 +1,7 @@
+{
+  "id": "enum_function_return",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Function returns an enum value that is then matched",
+  "timeoutSeconds": 10
+}

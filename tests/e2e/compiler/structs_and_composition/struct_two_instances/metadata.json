@@ -1,0 +1,7 @@
+{
+  "id": "struct_two_instances",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Two struct instances maintain independent state",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "fizzbuzz",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "FizzBuzz from 1 to 15 using elseif chain",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "reverse_in_place",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Reverse an integer array in place using two-pointer swap",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "odd_sum_recursive",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Recursively sum odd numbers up to n",
+  "timeoutSeconds": 10
+}

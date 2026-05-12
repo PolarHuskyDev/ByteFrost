@@ -1,0 +1,7 @@
+{
+  "id": "block_shadowing",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Current block redeclaration behavior remains stable",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "array_wrong_element_type_rejected",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Pushing a string into an array of int must be rejected",
+  "timeoutSeconds": 10
+}

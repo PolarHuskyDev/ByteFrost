@@ -1,0 +1,7 @@
+{
+  "id": "negative_literals",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Negative literal values in arithmetic",
+  "timeoutSeconds": 10
+}

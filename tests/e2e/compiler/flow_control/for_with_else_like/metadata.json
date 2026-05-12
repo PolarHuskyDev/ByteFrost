@@ -1,0 +1,7 @@
+{
+  "id": "for_find_first",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "For loop that finds first value matching condition",
+  "timeoutSeconds": 10
+}

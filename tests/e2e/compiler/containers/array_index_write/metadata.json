@@ -1,0 +1,7 @@
+{
+  "id": "array_index_write",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Write to array index then read back",
+  "timeoutSeconds": 10
+}

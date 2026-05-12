@@ -1,0 +1,7 @@
+{
+  "id": "count_digits",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Count digits in an integer using a while loop",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "stats_struct",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Struct that counts even and odd numbers via method",
+  "timeoutSeconds": 10
+}

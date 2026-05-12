@@ -1,0 +1,7 @@
+{
+  "id": "chained_elseif",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Multiple elseif branches select correct branch",
+  "timeoutSeconds": 10
+}

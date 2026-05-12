@@ -1,0 +1,7 @@
+{
+  "id": "precedence_arithmetic",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Arithmetic precedence must follow multiplication before addition",
+  "timeoutSeconds": 10
+}

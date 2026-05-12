@@ -1,0 +1,7 @@
+{
+  "id": "continue_outside_loop_diag",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Continue statement outside any loop must fail",
+  "timeoutSeconds": 10
+}

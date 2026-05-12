@@ -1,0 +1,7 @@
+{
+  "id": "map_wrong_value_type_rejected",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Assigning a value of the wrong type to a map entry must be rejected",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "for_countdown",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "For loop counting down",
+  "timeoutSeconds": 10
+}

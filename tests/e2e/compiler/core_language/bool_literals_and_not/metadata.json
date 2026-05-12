@@ -1,0 +1,7 @@
+{
+  "id": "bool_literals_and_not",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Boolean literal values and logical NOT operator",
+  "timeoutSeconds": 10
+}

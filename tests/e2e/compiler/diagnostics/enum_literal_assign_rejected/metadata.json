@@ -1,0 +1,7 @@
+{
+  "id": "enum_literal_assign_rejected",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Assigning integer to enum variable must be rejected",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "five_factorial",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Compute 5 factorial with for loop",
+  "timeoutSeconds": 10
+}

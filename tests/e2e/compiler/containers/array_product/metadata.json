@@ -1,0 +1,7 @@
+{
+  "id": "array_product",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Multiply all elements of an array using for-in",
+  "timeoutSeconds": 10
+}

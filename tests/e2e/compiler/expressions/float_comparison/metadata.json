@@ -1,0 +1,7 @@
+{
+  "id": "float_comparison",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Float comparison operators",
+  "timeoutSeconds": 10
+}

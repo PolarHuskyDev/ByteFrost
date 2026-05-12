@@ -1,0 +1,7 @@
+{
+  "id": "match_all_variants",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Match covers all enum variants explicitly",
+  "timeoutSeconds": 10
+}

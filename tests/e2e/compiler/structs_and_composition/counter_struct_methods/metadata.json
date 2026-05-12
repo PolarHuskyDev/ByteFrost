@@ -1,0 +1,7 @@
+{
+  "id": "counter_struct_methods",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Struct with increment and decrement methods",
+  "timeoutSeconds": 10
+}

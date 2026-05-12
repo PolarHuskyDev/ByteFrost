@@ -1,0 +1,7 @@
+{
+  "id": "const_struct_field_method_rejected",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Assigning to a const struct field inside a method must be rejected",
+  "timeoutSeconds": 10
+}

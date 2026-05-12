@@ -1,0 +1,7 @@
+{
+  "id": "array_push_and_length",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Push items to array and check length",
+  "timeoutSeconds": 10
+}

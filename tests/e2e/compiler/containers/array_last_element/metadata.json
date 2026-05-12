@@ -1,0 +1,7 @@
+{
+  "id": "array_last_element",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Access last element via length minus one index",
+  "timeoutSeconds": 10
+}

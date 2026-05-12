@@ -1,0 +1,7 @@
+{
+  "id": "string_interpolation_expr",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "String interpolation with arithmetic expressions",
+  "timeoutSeconds": 10
+}

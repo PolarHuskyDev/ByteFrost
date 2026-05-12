@@ -1,0 +1,7 @@
+{
+  "id": "match_arm_shadow",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Variable shadowed in match arm does not affect outer scope",
+  "timeoutSeconds": 10
+}

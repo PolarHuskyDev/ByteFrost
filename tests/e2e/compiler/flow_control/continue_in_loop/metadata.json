@@ -1,0 +1,7 @@
+{
+  "id": "continue_in_loop",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Continue skips rest of loop body for current iteration",
+  "timeoutSeconds": 10
+}

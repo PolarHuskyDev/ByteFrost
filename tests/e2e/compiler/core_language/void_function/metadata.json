@@ -1,0 +1,7 @@
+{
+  "id": "void_function",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Void function with side effects (print) called from main",
+  "timeoutSeconds": 10
+}

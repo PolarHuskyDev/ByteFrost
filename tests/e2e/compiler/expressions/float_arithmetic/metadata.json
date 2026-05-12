@@ -1,0 +1,7 @@
+{
+  "id": "float_arithmetic",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Addition multiplication and subtraction of float values",
+  "timeoutSeconds": 10
+}

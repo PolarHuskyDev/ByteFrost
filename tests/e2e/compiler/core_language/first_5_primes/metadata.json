@@ -1,0 +1,7 @@
+{
+  "id": "first_5_primes",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Collect and print the first 5 prime numbers using nested while",
+  "timeoutSeconds": 10
+}

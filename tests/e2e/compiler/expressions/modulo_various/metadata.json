@@ -1,0 +1,7 @@
+{
+  "id": "modulo_various",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Modulo operator with various inputs",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "multiple_consts",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Multiple const declarations used in arithmetic",
+  "timeoutSeconds": 10
+}

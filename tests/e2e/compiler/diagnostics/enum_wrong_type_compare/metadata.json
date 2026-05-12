@@ -1,0 +1,7 @@
+{
+  "id": "enum_wrong_type_compare",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Comparing enum to integer literal must fail",
+  "timeoutSeconds": 10
+}

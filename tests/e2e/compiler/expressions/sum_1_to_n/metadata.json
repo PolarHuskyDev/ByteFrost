@@ -1,0 +1,7 @@
+{
+  "id": "sum_1_to_n",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Sum integers from 1 to 7 using for loop",
+  "timeoutSeconds": 10
+}

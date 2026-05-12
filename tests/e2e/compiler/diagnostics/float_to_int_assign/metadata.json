@@ -1,0 +1,7 @@
+{
+  "id": "float_to_int_assign",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Assigning float to int variable must fail",
+  "timeoutSeconds": 10
+}

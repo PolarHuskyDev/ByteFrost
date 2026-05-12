@@ -1,0 +1,7 @@
+{
+  "id": "celsius_to_fahrenheit",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Convert 0 and 100 Celsius to Fahrenheit using float math",
+  "timeoutSeconds": 10
+}

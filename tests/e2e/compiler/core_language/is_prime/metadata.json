@@ -1,0 +1,7 @@
+{
+  "id": "is_prime",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Primality test using trial division with while loop",
+  "timeoutSeconds": 10
+}

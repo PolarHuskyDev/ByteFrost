@@ -1,0 +1,7 @@
+{
+  "id": "for_init_scope",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "For loop init var is accessible in body and update",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "string_equality",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Compare strings for equality using if statement",
+  "timeoutSeconds": 10
+}

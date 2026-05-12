@@ -1,0 +1,4 @@
+main(): int {
+	x: int = null;
+	return 0;
+}

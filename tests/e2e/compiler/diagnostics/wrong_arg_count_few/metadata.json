@@ -1,0 +1,7 @@
+{
+  "id": "wrong_arg_count_few",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Calling function with too few arguments must fail",
+  "timeoutSeconds": 10
+}

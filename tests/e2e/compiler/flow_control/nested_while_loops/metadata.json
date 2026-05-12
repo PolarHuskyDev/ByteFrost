@@ -1,0 +1,7 @@
+{
+  "id": "nested_while_loops",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Nested while loops with independent counters",
+  "timeoutSeconds": 10
+}

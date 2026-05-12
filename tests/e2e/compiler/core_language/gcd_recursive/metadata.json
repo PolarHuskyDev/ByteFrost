@@ -1,0 +1,7 @@
+{
+  "id": "gcd_recursive",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Recursive GCD using Euclidean algorithm",
+  "timeoutSeconds": 10
+}

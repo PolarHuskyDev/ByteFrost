@@ -1,0 +1,7 @@
+{
+  "id": "struct_fraction",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Struct with constructor and methods for a fraction",
+  "timeoutSeconds": 10
+}

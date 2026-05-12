@@ -1,0 +1,7 @@
+{
+  "id": "clamp_value",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Clamp function restricts value to range lo to hi",
+  "timeoutSeconds": 10
+}

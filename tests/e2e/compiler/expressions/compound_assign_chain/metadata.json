@@ -1,0 +1,7 @@
+{
+  "id": "compound_assign_chain",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Chain of compound assignments on same variable",
+  "timeoutSeconds": 10
+}

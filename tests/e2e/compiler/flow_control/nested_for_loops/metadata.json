@@ -1,0 +1,7 @@
+{
+  "id": "nested_for_loops",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Two nested for loops computing sum of products",
+  "timeoutSeconds": 10
+}

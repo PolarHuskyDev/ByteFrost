@@ -1,0 +1,7 @@
+{
+  "id": "absolute_value",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Absolute value function using unary negation",
+  "timeoutSeconds": 10
+}

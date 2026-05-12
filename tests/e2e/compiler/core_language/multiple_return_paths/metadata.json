@@ -1,0 +1,7 @@
+{
+  "id": "multiple_return_paths",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Function with multiple return paths",
+  "timeoutSeconds": 10
+}

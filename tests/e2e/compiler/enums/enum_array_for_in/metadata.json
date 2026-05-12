@@ -1,0 +1,7 @@
+{
+  "id": "enum_array_for_in",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Array of enum values iterated with for-in",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "nested_match",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Nested match expressions on different enum types",
+  "timeoutSeconds": 10
+}

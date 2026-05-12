@@ -1,0 +1,7 @@
+{
+  "id": "sum_1_to_100",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Sum integers 1 to 100 using while loop",
+  "timeoutSeconds": 10
+}

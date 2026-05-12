@@ -1,0 +1,7 @@
+{
+  "id": "swap_without_temp",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Swap two integers without a temporary variable using arithmetic",
+  "timeoutSeconds": 10
+}

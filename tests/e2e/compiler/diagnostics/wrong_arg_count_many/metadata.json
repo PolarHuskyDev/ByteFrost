@@ -1,0 +1,7 @@
+{
+  "id": "wrong_arg_count_many",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Calling function with too many arguments must fail",
+  "timeoutSeconds": 10
+}

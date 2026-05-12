@@ -1,0 +1,7 @@
+{
+  "id": "while_continue",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Continue statement in while skips even numbers",
+  "timeoutSeconds": 10
+}

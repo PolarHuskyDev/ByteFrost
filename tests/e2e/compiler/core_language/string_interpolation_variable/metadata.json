@@ -1,0 +1,7 @@
+{
+  "id": "string_interpolation_variable",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Interpolate a string variable inside a string literal",
+  "timeoutSeconds": 10
+}

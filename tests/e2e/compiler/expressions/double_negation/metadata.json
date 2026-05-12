@@ -1,0 +1,7 @@
+{
+  "id": "double_negation",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Double negation cancels and triple negation negates",
+  "timeoutSeconds": 10
+}

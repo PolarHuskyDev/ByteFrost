@@ -1,0 +1,7 @@
+{
+  "id": "reverse_array_while",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Iterate array in reverse order using while with index",
+  "timeoutSeconds": 10
+}

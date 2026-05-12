@@ -1,0 +1,7 @@
+{
+  "id": "struct_literal_init",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Struct initialized with literal syntax then accessed",
+  "timeoutSeconds": 10
+}

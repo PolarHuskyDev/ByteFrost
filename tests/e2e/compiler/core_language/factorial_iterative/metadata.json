@@ -1,0 +1,7 @@
+{
+  "id": "factorial_iterative",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Compute 10 factorial iteratively using for loop",
+  "timeoutSeconds": 10
+}

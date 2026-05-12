@@ -1,0 +1,7 @@
+{
+  "id": "matrix_2x2_methods",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "2x2 matrix struct with determinant and trace methods",
+  "timeoutSeconds": 10
+}

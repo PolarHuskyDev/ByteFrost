@@ -1,0 +1,7 @@
+{
+  "id": "string_array_for_in",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Iterate a string array with for-in and print each element",
+  "timeoutSeconds": 10
+}

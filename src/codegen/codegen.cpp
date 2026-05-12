@@ -183,6 +183,20 @@ void CodeGen::buildIR(const Program& program) {
 	// Generate struct method bodies.
 	generateStructMethods(hir);
 
+	// Pre-declare all top-level function prototypes so mutual and forward
+	// references resolve correctly during body generation.
+	for (const auto& fn : hir.functions) {
+		std::vector<llvm::Type*> paramTypes;
+		for (const auto& param : fn.params) {
+			paramTypes.push_back(getLLVMType(param.type));
+		}
+		llvm::Type* retType = getLLVMType(fn.returnType);
+		auto* funcType = llvm::FunctionType::get(retType, paramTypes, false);
+		if (!module->getFunction(fn.name)) {
+			llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, fn.name, module.get());
+		}
+	}
+
 	// Generate all top-level functions.
 	for (const auto& fn : hir.functions) {
 		generateFunction(fn);
@@ -484,18 +498,24 @@ void CodeGen::emitScopeCleanup() {
 }
 
 void CodeGen::declareVariable(const std::string& name,
-							  llvm::AllocaInst* alloca,
-							  llvm::Type* type,
-							  const std::string& bfTypeName) {
-	scopes.back().variables[name] = alloca;
-	scopes.back().varTypes[name] = type;
-	if (!bfTypeName.empty()) {
-		scopes.back().varBFTypeNames[name] = bfTypeName;
-	}
-	// Track heap-owning variables for refcount cleanup.
-	if (bfTypeName.substr(0, 6) == "array<" || bfTypeName.substr(0, 4) == "map<") {
-		scopes.back().heapOwned.push_back(name);
-	}
+                             llvm::AllocaInst* alloca,
+                             llvm::Type* type,
+                             const std::string& bfTypeName) {
+    // Check if the variable already exists in the current scope
+    auto& currentScope = scopes.back();
+    if (currentScope.variables.find(name) != currentScope.variables.end()) {
+        throw CodeGenError("Variable '" + name + "' redeclared in the same scope.");
+    }
+
+    // Declare the variable
+    currentScope.variables[name] = alloca;
+    currentScope.varTypes[name] = type;
+    currentScope.varBFTypeNames[name] = bfTypeName;
+
+    // Track heap-owning container variables so they get ref-count cleanup on exit.
+    if (bfTypeName.substr(0, 6) == "array<" || bfTypeName.substr(0, 4) == "map<") {
+        currentScope.heapOwned.push_back(name);
+    }
 }
 
 llvm::AllocaInst* CodeGen::lookupVariable(const std::string& name) {
@@ -1316,7 +1336,11 @@ void CodeGen::generateFunction(const bytefrost::HIRFunction& fn) {
 	llvm::Type* retType = getLLVMType(fn.returnType);
 	auto funcType = llvm::FunctionType::get(retType, paramTypes, false);
 
-	llvm::Function* function = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, fn.name, module.get());
+	// Re-use the pre-declared prototype if it exists; otherwise create.
+	llvm::Function* function = module->getFunction(fn.name);
+	if (!function) {
+		function = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, fn.name, module.get());
+	}
 
 	// Set parameter names.
 	size_t idx = 0;
@@ -1579,7 +1603,9 @@ void CodeGen::generateAssign(const bytefrost::HIRAssign& stmt) {
 			if (bfType.substr(0, 6) == "array<") {
 				std::string elemTypeName = bfType.substr(6, bfType.size() - 7);
 				TypeNode tn(elemTypeName);
-				ptrElemType = getLLVMType(tn);
+				llvm::Type* elemType = getLLVMType(tn);
+				// ptr already resolved by generateLValue; just record element type.
+				ptrElemType = elemType;
 			}
 		}
 		// Chained: this.field[i] or obj.field[i]
@@ -1588,12 +1614,17 @@ void CodeGen::generateAssign(const bytefrost::HIRAssign& stmt) {
 				auto [basePtr, baseBFType] = resolveStructBase(*ma->object);
 				auto baseStructIt = structRegistry.find(baseBFType);
 				if (baseStructIt != structRegistry.end()) {
-					auto fldBFIt = baseStructIt->second.fieldBFTypeNames.find(ma->member);
-					if (fldBFIt != baseStructIt->second.fieldBFTypeNames.end()) {
-						std::string fbt = fldBFIt->second;
-						if (fbt.substr(0, 6) == "array<") {
-							TypeNode tn(fbt.substr(6, fbt.size() - 7));
-							ptrElemType = getLLVMType(tn);
+					auto& baseInfo = baseStructIt->second;
+					auto fldBFIt = baseInfo.fieldBFTypeNames.find(ma->member);
+					if (fldBFIt != baseInfo.fieldBFTypeNames.end()) {
+						std::string fieldBFType = fldBFIt->second;
+						if (fieldBFType.substr(0, 6) == "array<") {
+							std::string eTN = fieldBFType.substr(6, fieldBFType.size() - 7);
+							TypeNode eTNode(eTN);
+							llvm::Type* eType = getLLVMType(eTNode);
+							// ptr already resolved by generateLValue; record element type.
+							(void)getOrCreateArrayType(eType); // keep registry populated
+							ptrElemType = eType;
 						}
 					}
 				}
@@ -1765,11 +1796,13 @@ void CodeGen::generateIf(const bytefrost::HIRIf& stmt) {
 
 	// Then block.
 	builder->SetInsertPoint(thenBB);
+	pushScope();
 	for (const auto& s : stmt.thenBlock.stmts) {
 		generateStatement(*s);
 		if (builder->GetInsertBlock()->getTerminator())
 			break;
 	}
+	popScope();
 	if (!builder->GetInsertBlock()->getTerminator()) {
 		builder->CreateBr(mergeBB);
 	}
@@ -1793,11 +1826,13 @@ void CodeGen::generateIf(const bytefrost::HIRIf& stmt) {
 		builder->CreateCondBr(eicond, elseIfBodyBBs[i], nextFalse);
 
 		builder->SetInsertPoint(elseIfBodyBBs[i]);
+		pushScope();
 		for (const auto& s : stmt.elseIfs[i].second.stmts) {
 			generateStatement(*s);
 			if (builder->GetInsertBlock()->getTerminator())
 				break;
 		}
+		popScope();
 		if (!builder->GetInsertBlock()->getTerminator()) {
 			builder->CreateBr(mergeBB);
 		}
@@ -1806,11 +1841,13 @@ void CodeGen::generateIf(const bytefrost::HIRIf& stmt) {
 	// Else block.
 	if (elseBB) {
 		builder->SetInsertPoint(elseBB);
+		pushScope();
 		for (const auto& s : stmt.elseBlock->stmts) {
 			generateStatement(*s);
 			if (builder->GetInsertBlock()->getTerminator())
 				break;
 		}
+		popScope();
 		if (!builder->GetInsertBlock()->getTerminator()) {
 			builder->CreateBr(mergeBB);
 		}
@@ -1844,11 +1881,13 @@ void CodeGen::generateWhile(const bytefrost::HIRWhile& stmt) {
 	continueTargets.push_back(condBB);
 
 	builder->SetInsertPoint(bodyBB);
+	pushScope();
 	for (const auto& s : stmt.body.stmts) {
 		generateStatement(*s);
 		if (builder->GetInsertBlock()->getTerminator())
 			break;
 	}
+	popScope();
 	if (!builder->GetInsertBlock()->getTerminator()) {
 		builder->CreateBr(condBB);
 	}
@@ -1897,11 +1936,13 @@ void CodeGen::generateFor(const bytefrost::HIRFor& stmt) {
 	continueTargets.push_back(updateBB);
 
 	builder->SetInsertPoint(bodyBB);
+	pushScope();
 	for (const auto& s : stmt.body.stmts) {
 		generateStatement(*s);
 		if (builder->GetInsertBlock()->getTerminator())
 			break;
 	}
+	popScope();
 	if (!builder->GetInsertBlock()->getTerminator()) {
 		builder->CreateBr(updateBB);
 	}
@@ -2086,11 +2127,13 @@ void CodeGen::generateMatch(const bytefrost::HIRMatch& stmt) {
 	// Generate case bodies.
 	for (auto& c : cases) {
 		builder->SetInsertPoint(c.bodyBB);
+		pushScope();
 		for (const auto& s : c.mc->body.stmts) {
 			generateStatement(*s);
 			if (builder->GetInsertBlock()->getTerminator())
 				break;
 		}
+		popScope();
 		if (!builder->GetInsertBlock()->getTerminator()) {
 			builder->CreateBr(mergeBB);
 		}
@@ -2310,7 +2353,8 @@ llvm::Value* CodeGen::generateIndex(const bytefrost::HIRIndexExpr& expr) {
 					auto* ptrType = llvm::PointerType::getUnqual(*context);
 					llvm::Value* fieldGEP = builder->CreateStructGEP(
 						baseInfo.llvmType, basePtr, fldIdxIt->second, ma->member + ".gep");
-					llvm::Value* data = builder->CreateLoad(ptrType, builder->CreateStructGEP(arrType, fieldGEP, 0), "data");
+					llvm::Value* data = builder->CreateLoad(
+						ptrType, builder->CreateStructGEP(arrType, fieldGEP, 0), "data");
 					llvm::Value* idx = generateExpression(*expr.index);
 					llvm::Value* elemPtr = builder->CreateGEP(eType, data, idx, "elem.ptr");
 					return builder->CreateLoad(eType, elemPtr, "elem");

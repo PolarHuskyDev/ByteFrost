@@ -1,0 +1,7 @@
+{
+  "id": "fibonacci_iterative",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Iterative Fibonacci using for loop",
+  "timeoutSeconds": 10
+}

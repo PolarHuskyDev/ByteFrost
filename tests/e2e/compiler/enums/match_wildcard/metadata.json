@@ -1,0 +1,7 @@
+{
+  "id": "match_wildcard",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Match with wildcard default arm catches unmatched variants",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "while_countdown",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "While loop counting down from 5",
+  "timeoutSeconds": 10
+}

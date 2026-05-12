@@ -1,0 +1,7 @@
+{
+  "id": "interpolation_nested_fields",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "String interpolation with struct field member access",
+  "timeoutSeconds": 10
+}

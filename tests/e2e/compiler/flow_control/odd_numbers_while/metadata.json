@@ -1,0 +1,7 @@
+{
+  "id": "odd_numbers_while",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Print odd numbers from 1 to 20 using while and if",
+  "timeoutSeconds": 10
+}

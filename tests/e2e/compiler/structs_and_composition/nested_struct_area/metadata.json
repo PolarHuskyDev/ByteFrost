@@ -1,0 +1,7 @@
+{
+  "id": "nested_struct_area",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Rect struct containing two Point structs with area method",
+  "timeoutSeconds": 10
+}

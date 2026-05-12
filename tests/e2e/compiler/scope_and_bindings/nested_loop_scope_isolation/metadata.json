@@ -1,0 +1,7 @@
+{
+  "id": "nested_loop_scope_isolation",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Inner for loop var does not leak into outer scope",
+  "timeoutSeconds": 10
+}

@@ -1,0 +1,7 @@
+{
+  "id": "struct_field_update",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Update struct field using compound assignment",
+  "timeoutSeconds": 10
+}

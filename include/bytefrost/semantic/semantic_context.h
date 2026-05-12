@@ -68,6 +68,9 @@ private:
 	// Struct name -> field name -> field semantic flags.
 	std::unordered_map<std::string, std::unordered_map<std::string, FieldSemInfo>> structFieldInfo_;
 
+	// Top-level function name -> parameter count (for call-site arity checking).
+	std::unordered_map<std::string, std::size_t> funcParamCounts_;
+
 	// ------------------------------------------------------------------
 	// Pass 1: collect top-level declarations
 	// ------------------------------------------------------------------

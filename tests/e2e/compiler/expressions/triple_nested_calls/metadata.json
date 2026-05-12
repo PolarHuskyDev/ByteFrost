@@ -1,0 +1,7 @@
+{
+  "id": "triple_nested_calls",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Three levels of function call nesting in one expression",
+  "timeoutSeconds": 10
+}

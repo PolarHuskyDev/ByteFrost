@@ -1,0 +1,7 @@
+{
+  "id": "redeclare_in_same_scope",
+  "target": "compiler",
+  "kind": "compiler-negative",
+  "description": "Declaring the same variable twice in the same scope must fail",
+  "timeoutSeconds": 10
+}

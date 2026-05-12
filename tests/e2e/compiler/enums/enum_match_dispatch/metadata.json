@@ -1,0 +1,7 @@
+{
+  "id": "enum_match_dispatch",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Match on Op enum to select arithmetic operation",
+  "timeoutSeconds": 10
+}

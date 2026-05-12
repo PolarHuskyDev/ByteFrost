@@ -1,0 +1,7 @@
+{
+  "id": "squares_array_for",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Build array of squares using for loop then iterate and print",
+  "timeoutSeconds": 10
+}

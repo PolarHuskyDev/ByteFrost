@@ -1,0 +1,7 @@
+{
+  "id": "nested_if_no_else",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Multiple independent if statements with no else",
+  "timeoutSeconds": 10
+}

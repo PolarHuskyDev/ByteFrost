@@ -1,0 +1,7 @@
+{
+  "id": "max_min_of_array",
+  "target": "compiler",
+  "kind": "compiler-positive",
+  "description": "Find max and min of an integer array with for-in",
+  "timeoutSeconds": 10
+}
