@@ -192,9 +192,19 @@ function build() {
 	if [ "$preset" == "Debug" ]; then
 		buildPreset="conan-debug"
 	fi
-	
-	printf "${YELLOW}>> Configuring with preset: conan-default${NC}\n"
-	cmake --preset="conan-default" -DBF_VERSION="$BF_VERSION"
+
+	# Multi-config generators (Visual Studio/Windows) configure once via
+	# conan-default then select Release/Debug at build time.
+	# Single-config generators (Unix Makefiles/Linux) bake the build type
+	# into the configure preset, so conan-release/conan-debug serve both roles.
+	if [ "$OS" == "windows" ]; then
+		configPreset="conan-default"
+	else
+		configPreset="$buildPreset"
+	fi
+
+	printf "${YELLOW}>> Configuring with preset: %s${NC}\n" "$configPreset"
+	cmake --preset="$configPreset" -DBF_VERSION="$BF_VERSION"
 	if [ $? -ne 0 ]; then
 		printf "${RED}Error:${NC} CMake configuration failed\n"
 		exit 1
