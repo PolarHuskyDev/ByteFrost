@@ -5,7 +5,7 @@ path_to_project=$(pwd)
 if ! command -v clang-format &> /dev/null
 then
 	echo "Error: clang-format is not installed. Please install it to format the code."
-	exit 0
+	exit 1
 fi
 
 # format source code
