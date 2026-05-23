@@ -2,9 +2,7 @@
   "configurations": [
     {
       "name": "Linux",
-      "compileCommands": [
-        "${workspaceFolder}/build/Release/compile_commands.json"
-      ],
+      "compileCommands": "${workspaceFolder}/build/Release/compile_commands.json",
       "includePath": [
         "${default}",
         "${workspaceFolder}/include",
@@ -13,13 +11,11 @@
     },
     {
       "name": "Win32",
-      "compileCommands": [
-		"${workspaceFolder}/build/Release/compile_commands.json"
-      ],
+      "compileCommands": "${workspaceFolder}/build/Release/compile_commands.json",
       "includePath": [
         "${default}",
         "${workspaceFolder}/include",
-        "${workspaceFolder}/build/include"
+        "${workspaceFolder}/build/**/include"
       ]
     }
   ],
