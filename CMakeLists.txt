@@ -4,15 +4,23 @@ project(byte_frost CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+#########################################################################################
 # Version injection — CI sets BF_VERSION via -DBF_VERSION=<tag>; dev builds use 0.0.0-dev.
+#########################################################################################
 if(NOT DEFINED BF_VERSION)
-    set(BF_VERSION "0.0.0-dev")
+set(BF_VERSION "0.0.0-dev")
 endif()
 configure_file(
-    "${CMAKE_SOURCE_DIR}/include/version.h.in"
-    "${CMAKE_BINARY_DIR}/include/version.h"
+	"${CMAKE_SOURCE_DIR}/include/version.h.in"
+	"${CMAKE_BINARY_DIR}/include/version.h"
 )
 
+#########################################################################################
+
+
+#########################################################################################
+# Dependencies
+#########################################################################################
 find_package(LLVM REQUIRED)
 find_package(GTest REQUIRED)
 
@@ -24,74 +32,86 @@ find_package(GTest REQUIRED)
 # always fails.  Since this project only uses LLVM's C++ API, suppress the
 # LLVM-C import-lib so the DLL is never pulled in.
 if(MSVC)
-    set_property(TARGET LLVM-C PROPERTY INTERFACE_LINK_LIBRARIES "")
+	set_property(TARGET LLVM-C PROPERTY INTERFACE_LINK_LIBRARIES "")
 endif()
 
+#########################################################################################
 # Core library shared between the main executable and tests
+#########################################################################################
 add_library(
-	byte_frost_lib
+	bytefrost_lib
 	STATIC
-	src/tokenizer/tokens.cpp
-	src/tokenizer/lexer.cpp
-	src/parser/parser.cpp
-	src/codegen/codegen.cpp
-	src/module_resolver/module_resolver.cpp
-	# Semantic layer (Phase 1)
-	src/bytefrost/diagnostics/diagnostic_engine.cpp
-	src/bytefrost/semantic/bf_type.cpp
-	src/bytefrost/semantic/symbol_table.cpp
-	src/bytefrost/semantic/type_resolver.cpp
-	src/bytefrost/semantic/type_checker.cpp
-	src/bytefrost/semantic/semantic_context.cpp
-	src/bytefrost/hir/hir_builder.cpp
-	# Linker: select the platform-specific implementation at configure time.
-	$<IF:$<BOOL:${WIN32}>,src/linker/linker_pe.cpp,src/linker/linker_elf.cpp>
+	src/bytefrost/tokenizer/tokens.cpp
+	src/bytefrost/tokenizer/tokenizers.cpp
 )
 
 target_include_directories(
-	byte_frost_lib
+	bytefrost_lib
 	PUBLIC
-	include
+	include/bytefrost
 	"${CMAKE_BINARY_DIR}/include"
 )
 
-target_link_libraries(byte_frost_lib PUBLIC llvm-core::llvm-core)
+target_link_libraries(bytefrost_lib PUBLIC llvm-core::llvm-core)
 
-# Main executable
+#########################################################################################
+# Compiler main executable - bytefrost
+#########################################################################################
 add_executable(
-	byte_frost
-	src/main.cpp
+	bytefrost
+	src/bytefrost/main.cpp
 )
 
-target_link_libraries(byte_frost byte_frost_lib)
+target_link_libraries(bytefrost bytefrost_lib)
 
-# Orca build orchestrator
+#########################################################################################
+# Orca build orchestrator - orca
+#########################################################################################
 add_executable(
 	orca
 	src/orca/main.cpp
 )
 
-target_link_libraries(orca byte_frost_lib)
+target_link_libraries(orca bytefrost_lib)
 
+#########################################################################################
 # Tests
+#########################################################################################
+# Compiler - bytefrost
 enable_testing()
 
 add_executable(
-	unit_tests
-	tests/lexer_test.cpp
-	tests/parser_test.cpp
-	tests/codegen_test.cpp
-	tests/semantic_test.cpp
-	tests/hir_builder_test.cpp
+	bytefrost_compiler_tests
+	tests/bytefrost/lexer.spec.cpp
 )
 
-target_link_libraries(unit_tests byte_frost_lib GTest::gtest GTest::gtest_main)
+target_link_libraries(bytefrost_compiler_tests bytefrost_lib GTest::gtest GTest::gtest_main)
 
 include(GoogleTest)
-gtest_discover_tests(unit_tests DISCOVERY_MODE PRE_TEST)
+gtest_discover_tests(bytefrost_compiler_tests DISCOVERY_MODE PRE_TEST)
 
-install(TARGETS byte_frost orca DESTINATION "."
-        RUNTIME DESTINATION bin
-        ARCHIVE DESTINATION lib
-        LIBRARY DESTINATION lib
-        )
+
+# Orca
+# enable_testing()
+
+# add_executable(
+# 	orca_tests
+# 	tests/orca/lexer.spec.cpp
+# )
+
+# target_link_libraries(orca_tests bytefrost_lib GTest::gtest GTest::gtest_main)
+
+# include(GoogleTest)
+# gtest_discover_tests(orca_tests DISCOVERY_MODE PRE_TEST)
+
+
+#########################################################################################
+# Installation
+# Allows user to run `cmake --install .` to copy the bytefrost and orca executables to the bin/ directory
+# and the bytefrost_lib static library to the lib/ directory. Adjust as needed for your specific installation requirements.
+#########################################################################################
+install(TARGETS bytefrost orca DESTINATION "."
+	RUNTIME DESTINATION bin
+	ARCHIVE DESTINATION lib
+	LIBRARY DESTINATION lib
+)
