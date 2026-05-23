@@ -203,8 +203,19 @@ function build() {
 		configPreset="$buildPreset"
 	fi
 
+	# Build cmake configure arg list; BF_CMAKE_CACHE injects a cmake initial-cache
+	# file (-C flag) for CI-specific overrides (e.g. static linker flags on Linux).
+	local cmake_config_args=("--preset=${configPreset}" "-DBF_VERSION=${BF_VERSION}")
+	if [ -n "${BF_CMAKE_CACHE:-}" ]; then
+		if [ ! -f "${BF_CMAKE_CACHE}" ]; then
+			printf "${RED}Error:${NC} BF_CMAKE_CACHE file not found: %s\n" "${BF_CMAKE_CACHE}"
+			exit 1
+		fi
+		cmake_config_args+=("-C" "${BF_CMAKE_CACHE}")
+	fi
+
 	printf "${YELLOW}>> Configuring with preset: %s${NC}\n" "$configPreset"
-	cmake --preset="$configPreset" -DBF_VERSION="$BF_VERSION"
+	cmake "${cmake_config_args[@]}"
 	if [ $? -ne 0 ]; then
 		printf "${RED}Error:${NC} CMake configuration failed\n"
 		exit 1

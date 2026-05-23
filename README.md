@@ -1,6 +1,6 @@
-# ByteFrost programming language [![CI](https://github.com/PolarHuskyDev/ByteFrost/actions/workflows/ci.yml/badge.svg)](https://github.com/PolarHuskyDev/ByteFrost/actions/workflows/ci.yml) [![Release](https://github.com/PolarHuskyDev/ByteFrost/actions/workflows/release.yml/badge.svg)](https://github.com/PolarHuskyDev/ByteFrost/actions/workflows/release.yml)
+# ByteFrost programming language
+[![CI](https://github.com/PolarHuskyDev/ByteFrost/actions/workflows/ci.yml/badge.svg)](https://github.com/PolarHuskyDev/ByteFrost/actions/workflows/ci.yml)
 
-> The bible for this project is [LLVM tutorial](https://llvm.org/docs/tutorial/MyFirstLanguageFrontend/index.html)
 
 ByteFrost is a systems language aiming for ease of use.
 
@@ -8,7 +8,7 @@ ByteFrost is a systems language aiming for ease of use.
 
 A simple hello world example would be
 
-```bf
+```bytefrost
 main(): int {
 	print("Hello, World!");
 
@@ -39,7 +39,7 @@ Note: Let me know where some data types do not belong here or are unnecessary to
 Next, I would like to define a set of control flow constructs. These include if, else, elseif, for, while, pattern-matching (switch-case like?), break, continue:
 
 - if/else example
-```bf
+```bytefrost
 main(): int {
 	x: int = 3;
 
@@ -54,7 +54,7 @@ main(): int {
 ```
 
 For loop example
-```bf
+```bytefrost
 fib(n: int): int {
 	if (n <= 1) {
 		return n;
@@ -71,7 +71,7 @@ main(): int {
 ```
 
 While loop example
-```bf
+```bytefrost
 main(): int {
 	x: int = 0;
 	while (x <= 10) {
@@ -85,7 +85,7 @@ main(): int {
 
 pattern matching example
 
-```bf
+```bytefrost
 main(): int {
 	state: string = "HIGH"; // HIGH, LOW, MIDDLE, INTERMEDIATE
 
@@ -109,7 +109,7 @@ main(): int {
 ```
 
 break and continue example
-```bf
+```bytefrost
 main(): int {
 	x: int = 0;
 	while (x <= 10) {
@@ -132,7 +132,7 @@ main(): int {
 
 Finally I want to provide the possibility to developers to extend the language defining custom types:
 
-```bf
+```bytefrost
 struct Person {
 	name: string;
 	age: int;
@@ -154,7 +154,7 @@ main(): int {
 ```
 
 Containers
-```bf
+```bytefrost
 main(): int {
 	list: array<int> = [0, 1, 2, 3, 4, 5];
 	squared: array<int>;
@@ -169,7 +169,7 @@ main(): int {
 }
 ```
 
-```bf
+```bytefrost
 main(): int {
 	httpCodes: map<int, string>;
 	httpCodes[200] = "Ok";
@@ -191,7 +191,7 @@ main(): int {
 
 Structs can contain fields of other struct types, enabling composition:
 
-```bf
+```bytefrost
 struct Point {
 	x: int;
 	y: int;
@@ -258,7 +258,7 @@ This is a structural guarantee: no cycle collector is needed.
 
 ByteFrost currently does not support recursive data structures like linked lists or trees directly. The compiler rejects both **direct** and **indirect** cycles:
 
-```bf
+```bytefrost
 // Direct: struct references itself
 struct Node {
     value: int;
@@ -283,7 +283,7 @@ Codegen error: Cyclic struct dependency detected: A -> B -> A. ...
 **Why?** Structs are value types stored inline on the stack. A `Node` containing another `Node` (directly or through a chain of intermediate structs) would require infinite storage. Every language shares this fundamental constraint — C uses pointers (`struct Node*`), Rust uses `Box<Node>`, Java/Python use reference semantics.
 
 **Future path — `Box<T>`:** A heap-allocated, reference-counted pointer type would enable recursive structures:
-```bf
+```bytefrost
 struct Node {
     value: int;
     next: Box<Node>;  // 8-byte pointer to heap-allocated Node

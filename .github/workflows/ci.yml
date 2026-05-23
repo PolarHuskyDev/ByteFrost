@@ -14,14 +14,10 @@ jobs:
         include:
           - os: ubuntu-22.04
             name: Linux
-            configure_preset: conan-release
-            build_preset: conan-release
             bin_dir: build/Release
             unit_tests_bin: build/Release/unit_tests
           - os: windows-latest
             name: Windows
-            configure_preset: conan-default
-            build_preset: conan-release
             bin_dir: build/Release
             unit_tests_bin: build/Release/unit_tests.exe
 
@@ -50,34 +46,13 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update -y && sudo apt-get install -y lld
 
-      - name: Detect Conan profile
-        run: conan profile detect --force
-
-      - name: Install dependencies
+      - name: Prepare
         shell: bash
-        run: |
-          conan install . \
-            --build=missing \
-            --settings build_type=Release \
-            --settings compiler.cppstd=17
-
-      - name: Configure (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          cmake --preset ${{ matrix.configure_preset }} \
-            -DBF_VERSION=0.0.0-dev
-
-      - name: Configure (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          cmake --preset ${{ matrix.configure_preset }} \
-            -DBF_VERSION=0.0.0-dev
+        run: ./perma.sh prepare
 
       - name: Build
         shell: bash
-        run: cmake --build --preset ${{ matrix.build_preset }}
+        run: ./perma.sh build
 
       - name: Run unit tests
         shell: bash
