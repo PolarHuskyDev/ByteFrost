@@ -8,7 +8,7 @@
       "includePath": [
         "${default}",
         "${workspaceFolder}/include",
-        "${workspaceFolder}/build/include"
+        "${workspaceFolder}/build/**/include"
       ]
     },
     {

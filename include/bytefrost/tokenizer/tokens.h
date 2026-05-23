@@ -134,10 +134,6 @@ struct Token {
 		: type(type), value(value), line(line), column(column) {
 	}
 
-	Token(TokenType type, const std::string& value, int line, int column)
-		: type(type), value(value), line(line), column(column) {
-	}
-
 	const std::string& toString() const {
 		if (type == TokenType::END_OF_FILE) {
 			static const std::string eofStr = "EOF";

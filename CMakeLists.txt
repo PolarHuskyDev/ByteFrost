@@ -42,13 +42,13 @@ add_library(
 	bytefrost_lib
 	STATIC
 	src/bytefrost/tokenizer/tokens.cpp
-	src/bytefrost/tokenizer/tokenizers.cpp
+	src/bytefrost/tokenizer/tokenizer.cpp
 )
 
 target_include_directories(
 	bytefrost_lib
 	PUBLIC
-	include/bytefrost
+	include
 	"${CMAKE_BINARY_DIR}/include"
 )
 
