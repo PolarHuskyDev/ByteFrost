@@ -363,21 +363,3 @@ struct Node {
 |[i]|Array element access|`a[0]`|
 |["k"]|Map element access|`m["key"]`|
 
-
-
-> [!important]
-> License Migration Notice
-
-As of May 2026, ByteFrost has migrated from the MIT License to the Apache License, Version 2.0.
-
-### Why the change?
-- Same permissiveness: Apache 2.0 remains a permissive open-source license, allowing commercial use, modification, distribution, and private use — just like MIT.
-- Stronger legal protections: Unlike MIT, Apache 2.0 includes an explicit patent grant and a termination clause. This shields users from contributor patent lawsuits and discourages patent litigation against the project.
-- Industry standard: Apache 2.0 is widely adopted by major open-source projects (e.g., Android, Hadoop, Kubernetes), making it familiar and trusted by companies and legal teams.
-### What this means for you
-- You can continue to use, modify, and distribute ByteFrost freely.
-- You benefit from added legal safety through patent protections.
-- No additional copyleft obligations are introduced — ByteFrost remains permissive.
-### Next steps
-- All new contributions will be accepted under the Apache License 2.0.
-- Existing code previously under MIT is now governed by Apache 2.0 going forward.
