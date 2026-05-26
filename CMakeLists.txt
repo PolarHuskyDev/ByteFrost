@@ -37,6 +37,21 @@ if(MSVC)
 endif()
 
 #########################################################################################
+# Logger static library
+#########################################################################################
+add_library(
+	logger_lib
+	STATIC
+	src/logger/logger.cpp
+)
+
+target_include_directories(
+	logger_lib
+	PUBLIC
+	include
+)
+
+#########################################################################################
 # Core library shared between the main executable and tests
 #########################################################################################
 add_library(
@@ -53,7 +68,7 @@ target_include_directories(
 	"${CMAKE_BINARY_DIR}/include"
 )
 
-target_link_libraries(bytefrost_lib PUBLIC llvm-core::llvm-core)
+target_link_libraries(bytefrost_lib PUBLIC llvm-core::llvm-core logger_lib)
 
 #########################################################################################
 # Compiler main executable - bytefrost
@@ -83,7 +98,7 @@ enable_testing()
 
 add_executable(
 	bytefrost_compiler_tests
-	tests/bytefrost/lexer.spec.cpp
+	tests/bytefrost/tokenizer.spec.cpp
 )
 
 target_link_libraries(bytefrost_compiler_tests bytefrost_lib GTest::gtest GTest::gtest_main)
@@ -97,7 +112,7 @@ gtest_discover_tests(bytefrost_compiler_tests DISCOVERY_MODE PRE_TEST)
 
 # add_executable(
 # 	orca_tests
-# 	tests/orca/lexer.spec.cpp
+# 	tests/orca/tokenizer.spec.cpp
 # )
 
 # target_link_libraries(orca_tests bytefrost_lib GTest::gtest GTest::gtest_main)

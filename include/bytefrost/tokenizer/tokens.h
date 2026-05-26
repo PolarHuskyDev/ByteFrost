@@ -33,17 +33,23 @@ enum class TokenType {
 	// Keywords - types
 	VOID,
 	BOOL,
-	INT,
-	FLOAT,
 	STRING,
+	// Keywords - integer types
+	I8, I16, I32, I64, I128,
+	U8, U16, U32, U64, U128,
+	ISIZE, USIZE,
+	// Keywords - float types
+	F16, F32, F64, F128,
 
-	// Keywords - custom types
+	// Keywords - custom types, custom operators, and other special identifiers
 	STRUCT,
+	IS,
 	THIS,
 	ENUM,
 	INTERFACE,
 	IMPLEMENT_METHOD,
 	IMPLEMENTS_INTERFACE,
+	CUSTOM_OPERATOR,  // for user-defined operators (allows arithmetic operators only for custom)
 
 	// Keywords - data structures, containers, iterators, and utilities
 	ARRAY,
@@ -111,7 +117,7 @@ enum class TokenType {
 	QUESTION_MARK,		// ?
 	QUESTION_MARK_DOT,	// ?.
 	ARROW,				// =>
-	UNDERSCORE,			// _  // match wildcard
+	UNDERSCORE,			// _  // match wildcard, also for identifiers _var _function
 
 	// Special tokens
 	IDENTIFIER,
@@ -134,20 +140,5 @@ struct Token {
 		: type(type), value(value), line(line), column(column) {
 	}
 
-	const std::string& toString() const {
-		if (type == TokenType::END_OF_FILE) {
-			static const std::string eofStr = "EOF";
-			return eofStr;
-		}
-
-		if (type == TokenType::UNKNOWN) {
-			static const std::string unknownStr = "UNKNOWN";
-			return unknownStr;
-		}
-
-		static const std::string tokenStr =
-			"Token {" + tokenTypeToString(type) + ", \"" + value + "\", line: " + std::to_string(line)
-			+ ", column: " + std::to_string(column) + ", length: " + std::to_string(value.size()) + "}";
-		return tokenStr;
-	}
+	std::string toString() const;
 };

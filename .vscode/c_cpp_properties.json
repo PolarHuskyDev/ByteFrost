@@ -6,16 +6,16 @@
       "includePath": [
         "${default}",
         "${workspaceFolder}/include",
-        "${workspaceFolder}/build/**/include"
+        "${workspaceFolder}/build/Release/include"
       ]
     },
     {
       "name": "Win32",
-      "compileCommands": "${workspaceFolder}/build/Release/compile_commands.json",
+      "configurationProvider": "ms-vscode.cmake-tools",
       "includePath": [
         "${default}",
         "${workspaceFolder}/include",
-        "${workspaceFolder}/build/**/include"
+        "${workspaceFolder}/build/include"
       ]
     }
   ],
