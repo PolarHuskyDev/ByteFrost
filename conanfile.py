@@ -22,7 +22,7 @@ class byte_frostRecipe(ConanFile):
 
     def requirements(self):
         self.requires("llvm-core/19.1.7")
-        self.requires("gtest/1.15.0")
+        self.requires("gtest/1.17.0")
         
     def layout(self):
         cmake_layout(self)

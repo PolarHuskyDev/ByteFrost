@@ -19,14 +19,10 @@ jobs:
         include:
           - os: ubuntu-22.04
             name: Linux
-            configure_preset: conan-release
-            build_preset: conan-release
             bin_dir: build/Release
             unit_tests_bin: build/Release/unit_tests
           - os: windows-latest
             name: Windows
-            configure_preset: conan-default
-            build_preset: conan-release
             bin_dir: build/Release
             unit_tests_bin: build/Release/unit_tests.exe
 
@@ -64,31 +60,31 @@ jobs:
         run: sudo apt-get update -y && sudo apt-get install -y lld
 
       # ── Windows ──────────────────────────────────────────────────────────────
-      - name: Detect Conan profile
-        run: conan profile detect --force
-
-      - name: Install dependencies
+      - name: Prepare
         shell: bash
-        run: |
-          conan install . \
-            --build=missing \
-            --settings build_type=Release \
-            --settings compiler.cppstd=17
+        run: ./perma.sh prepare
 
-      - name: Configure (Linux)
+      - name: Create cmake release flags (Linux)
         if: runner.os == 'Linux'
         run: |
-          cmake --preset ${{ matrix.configure_preset }} \
-            -DBF_VERSION="$BF_VERSION" \
-            -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+          printf 'set(CMAKE_EXE_LINKER_FLAGS "-static-libstdc++ -static-libgcc" CACHE STRING "")\n' \
+            > .cmake-release-init.cmake
 
       - name: Build (Linux)
         if: runner.os == 'Linux'
-        run: cmake --build --preset ${{ matrix.build_preset }} --target byte_frost orca unit_tests
+        env:
+          BF_CMAKE_CACHE: .cmake-release-init.cmake
+        run: ./perma.sh build
 
       - name: Strip binaries (Linux)
         if: runner.os == 'Linux'
         run: strip --strip-all ${{ matrix.bin_dir }}/byte_frost ${{ matrix.bin_dir }}/orca
+
+      # ── Windows ──────────────────────────────────────────────────────────────
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: ./perma.sh build
 
       - name: Run unit tests (Linux)
         if: runner.os == 'Linux'
@@ -107,19 +103,6 @@ jobs:
           cp README.md LICENSE "dist/${ARCHIVE_NAME}/"
           tar -czf "${ARCHIVE_NAME}.tar.gz" -C dist "${ARCHIVE_NAME}"
           sha256sum "${ARCHIVE_NAME}.tar.gz" > SHA256SUMS
-
-      # ── Windows ──────────────────────────────────────────────────────────────
-      - name: Configure (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          cmake --preset ${{ matrix.configure_preset }} \
-            "-DBF_VERSION=$BF_VERSION"
-
-      - name: Build (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: cmake --build --preset ${{ matrix.build_preset }} --target byte_frost orca unit_tests --config Release
 
       - name: Run unit tests (Windows)
         if: runner.os == 'Windows'

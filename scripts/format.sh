@@ -2,6 +2,12 @@
 
 path_to_project=$(pwd)
 
+if ! command -v clang-format &> /dev/null
+then
+	echo "Error: clang-format is not installed. Please install it to format the code."
+	exit 1
+fi
+
 # format source code
 find "$path_to_project/src" -name '*.cpp' -exec clang-format -i {} \;
 find "$path_to_project/src" -name '*.h' -exec clang-format -i {} \;
